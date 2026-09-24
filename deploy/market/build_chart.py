@@ -90,9 +90,9 @@ metadata:
     - Lifestyle
     - agents
   tags:
-    - education
-    - investing
-    - kids
+    - finance
+    - lifestyle
+    - chatbot
 
 entrances:
   - name: juniorinvestor
