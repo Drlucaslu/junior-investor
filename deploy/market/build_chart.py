@@ -8,11 +8,14 @@ import shutil
 import sys
 import textwrap
 
-VERSION = "0.2.2"
+VERSION = "0.3.0"        # chart version (Olares Market)
+IMAGE_TAG = "0.2.2"      # container image tag (unchanged app code)
+API_VERSION = "v3"       # OlaresManifest apiVersion: v3 = Olares 1.12.6+
+OLARES_RANGE = ">=1.12.6-0"
 GH_USER = "Drlucaslu"
 REPO = f"https://github.com/{GH_USER}/junior-investor"
 RAW = f"https://raw.githubusercontent.com/{GH_USER}/junior-investor/main/deploy/market/assets"
-IMAGE = f"ghcr.io/{GH_USER.lower()}/junior-investor:{VERSION}"
+IMAGE = f"ghcr.io/{GH_USER.lower()}/junior-investor:{IMAGE_TAG}"
 SCREENS = [f"{RAW}/screenshot-{i}.webp" for i in range(1, 7)]
 
 FULL_EN = """\
@@ -53,8 +56,8 @@ FULL_ZH = """\
 不构成投资建议，行情数据可能有延迟。
 """
 
-UPGRADE_EN = "Parents can now choose the AI model in Settings: the Olares local model or any OpenAI-compatible cloud model. More robust streaming on mobile networks and while a local model is loading."
-UPGRADE_ZH = "家长现在可以在“设置”中选择 AI 模型：Olares 本机模型，或任何 OpenAI 兼容的云端模型。移动网络和本地模型加载期间的流式回答更稳定。"
+UPGRADE_EN = "New v3 app format for Olares 1.12.6 and later. Parents can choose the AI model in Settings: the Olares local model or any OpenAI-compatible cloud model. More robust streaming on mobile networks and while a local model is loading."
+UPGRADE_ZH = "采用 Olares 1.12.6 及以上版本的 v3 应用格式。家长可以在“设置”中选择 AI 模型：Olares 本机模型，或任何 OpenAI 兼容的云端模型。移动网络和本地模型加载期间的流式回答更稳定。"
 
 
 def q(s: str) -> str:
@@ -71,7 +74,7 @@ def manifest(lang: str, llm_default: str, llm_model: str) -> str:
     desc = "儿童/青少年投资学习与模拟交易" if zh else "Kids learn investing: AI masters, research & paper trading"
     return f"""olaresManifest.version: '0.12.0'
 olaresManifest.type: app
-apiVersion: ''
+apiVersion: '{API_VERSION}'
 
 workloadReplicas:
   juniorinvestor: 1
@@ -136,7 +139,7 @@ options:
   apiTimeout: 0
   dependencies:
     - name: olares
-      version: '>=1.12.3-0,<1.12.6'
+      version: '{OLARES_RANGE}'
       type: system
 
 envs:
@@ -265,6 +268,19 @@ spec:
 """
 
 
+def i18n(lang: str) -> str:
+    zh = lang == "zh"
+    title = "少年投资家" if zh else "Junior Investor"
+    desc = "儿童/青少年投资学习与模拟交易" if zh else "Kids learn investing: AI masters, research & paper trading"
+    return f"""metadata:
+  title: {q(title)}
+  description: {q(desc)}
+spec:
+  fullDescription: |
+{block(FULL_ZH if zh else FULL_EN, 4)}  upgradeDescription: |
+{block(UPGRADE_ZH if zh else UPGRADE_EN, 4)}"""
+
+
 def build(kind: str) -> str:
     here = os.path.dirname(os.path.abspath(__file__))
     out = os.path.join(here, "out", kind, "juniorinvestor")
@@ -273,12 +289,12 @@ def build(kind: str) -> str:
     # "personal" = same chart with your own default endpoint taken from the environment (never committed).
     llm = (os.environ.get("PERSONAL_LLM_BASE_URL", ""), os.environ.get("PERSONAL_LLM_MODEL", "")) if kind == "personal" else ("", "")
     w = lambda p, s: open(os.path.join(out, p), "w").write(s)  # noqa: E731
-    w("Chart.yaml", f"apiVersion: v2\nname: juniorinvestor\ndescription: Junior Investor - kids investment learning and paper trading\ntype: application\nversion: '{VERSION}'\nappVersion: '{VERSION}'\n")
+    w("Chart.yaml", f"apiVersion: v2\nname: juniorinvestor\ndescription: Junior Investor - kids investment learning and paper trading\ntype: application\nversion: '{VERSION}'\nappVersion: '{IMAGE_TAG}'\n")
     w("values.yaml", "# Olares injects userspace / olaresEnv values at install time.\nworkloads:\n  juniorinvestor:\n    replicaCount: 1\n")
     w("OlaresManifest.yaml", manifest("en", *llm))
     for loc, lang in (("en-US", "en"), ("zh-CN", "zh")):
         os.makedirs(os.path.join(out, "i18n", loc))
-        w(os.path.join("i18n", loc, "OlaresManifest.yaml"), manifest(lang, *llm))
+        w(os.path.join("i18n", loc, "OlaresManifest.yaml"), i18n(lang))
     w("owners", f"owners:\n- {GH_USER}\n")
     w(os.path.join("templates", "deployment.yaml"), DEPLOYMENT.replace("IMAGE_PLACEHOLDER", IMAGE))
     w(os.path.join("templates", "service.yaml"), SERVICE)
