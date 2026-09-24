@@ -1,0 +1,140 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --background: 40 33% 98%;
+    --foreground: 200 28% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 200 28% 12%;
+    --muted: 40 22% 94.5%;
+    --muted-foreground: 200 9% 37%;
+    --border: 40 14% 87%;
+    --input: 40 12% 82%;
+    --ring: 186 70% 30%;
+    --primary: 186 72% 24%;
+    --primary-foreground: 0 0% 100%;
+    --primary-soft: 186 45% 93%;
+    --accent: 28 88% 60%;
+    --accent-foreground: 24 60% 16%;
+    --accent-soft: 32 92% 94%;
+    --up: 152 58% 30%;
+    --up-soft: 150 45% 93%;
+    --down: 2 64% 45%;
+    --down-soft: 4 80% 95%;
+    --gain: var(--up);
+    --gain-soft: var(--up-soft);
+    --loss: var(--down);
+    --loss-soft: var(--down-soft);
+    --warning: 36 90% 34%;
+    --warning-soft: 42 95% 92%;
+    --danger: 2 64% 45%;
+    --danger-soft: 4 80% 95%;
+    --success: 152 58% 30%;
+    --success-soft: 150 45% 93%;
+    --shadow: 200 30% 20%;
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --series-4: #eda100;
+    --series-5: #e87ba4;
+    --series-6: #008300;
+    --series-7: #4a3aa7;
+    --series-8: #e34948;
+    --series-other: #a3a29c;
+    --chart-grid: #e7e4dd;
+    --chart-line: #126066;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --background: 200 22% 7%;
+      --foreground: 40 20% 94%;
+      --card: 200 18% 10.5%;
+      --card-foreground: 40 20% 94%;
+      --muted: 200 14% 15%;
+      --muted-foreground: 200 9% 68%;
+      --border: 200 12% 20%;
+      --input: 200 12% 26%;
+      --ring: 180 50% 55%;
+      --primary: 180 48% 52%;
+      --primary-foreground: 200 30% 7%;
+      --primary-soft: 186 35% 16%;
+      --accent: 30 85% 64%;
+      --accent-foreground: 24 60% 12%;
+      --accent-soft: 30 40% 16%;
+      --up: 150 45% 55%;
+      --up-soft: 150 30% 14%;
+      --down: 2 75% 67%;
+      --down-soft: 2 35% 16%;
+      --warning: 40 85% 62%;
+      --warning-soft: 40 40% 14%;
+      --danger: 2 75% 67%;
+      --danger-soft: 2 35% 16%;
+      --success: 150 45% 55%;
+      --success-soft: 150 30% 14%;
+      --shadow: 0 0% 0%;
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #199e70;
+      --series-4: #c98500;
+      --series-5: #d55181;
+      --series-6: #008300;
+      --series-7: #9085e9;
+      --series-8: #e66767;
+      --series-other: #6b6a64;
+      --chart-grid: #2a3033;
+      --chart-line: #5cc7c4;
+    }
+  }
+
+  /* "Red = up" (China) colour convention */
+  :root[data-color-convention="red-up"] {
+    --gain: var(--down);
+    --gain-soft: var(--down-soft);
+    --loss: var(--up);
+    --loss-soft: var(--up-soft);
+  }
+
+  * { @apply border-border; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "tnum" 0;
+    overflow-x: hidden;
+  }
+  :focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+  button, [role="button"] { -webkit-tap-highlight-color: transparent; }
+  .tabular { font-variant-numeric: tabular-nums; }
+}
+
+@layer components {
+  .prose-report { @apply text-[0.95rem] leading-7 text-foreground; overflow-wrap: anywhere; }
+  .prose-report h1 { @apply mt-6 mb-3 text-xl font-semibold; }
+  .prose-report h2 { @apply mt-7 mb-3 text-lg font-semibold text-foreground; }
+  .prose-report h3 { @apply mt-5 mb-2 text-base font-semibold; }
+  .prose-report p { @apply my-3; }
+  .prose-report ul { @apply my-3 list-disc pl-6 space-y-1.5; }
+  .prose-report ol { @apply my-3 list-decimal pl-6 space-y-1.5; }
+  .prose-report li > p { @apply my-1; }
+  .prose-report a { @apply text-primary underline underline-offset-2; }
+  .prose-report strong { @apply font-semibold; }
+  .prose-report blockquote { @apply my-4 border-l-4 border-primary/30 bg-muted/60 px-4 py-2 text-muted-foreground rounded-r-md; }
+  .prose-report code { @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]; }
+  .prose-report pre { @apply my-4 overflow-x-auto rounded-lg bg-muted p-3 text-xs leading-5; }
+  .prose-report pre code { @apply bg-transparent p-0; }
+  .prose-report table { @apply my-4 w-full text-sm; }
+  .prose-report th { @apply border-b px-2 py-1.5 text-left font-medium text-muted-foreground; }
+  .prose-report td { @apply border-b px-2 py-1.5; }
+  .prose-report hr { @apply my-6; }
+  .prose-report em { @apply text-muted-foreground; }
+  .prose-chat > :first-child { @apply mt-0; }
+  .prose-chat > :last-child { @apply mb-0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

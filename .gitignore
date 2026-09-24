@@ -1,0 +1,14 @@
+node_modules/
+__pycache__/
+.pytest_cache/
+*.db
+.env
+apps/web/dist/
+dist-upload/
+upload-v2/
+upload-v3/
+deploy/market/out/
+docs/screenshots/
+deploy/market/demo/*.json
+deploy/market/assets/raw-*.png
+deploy/market/assets/featured.png
