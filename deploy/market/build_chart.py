@@ -73,6 +73,9 @@ def manifest(lang: str, llm_default: str, llm_model: str) -> str:
 olaresManifest.type: app
 apiVersion: ''
 
+workloadReplicas:
+  juniorinvestor: 1
+
 metadata:
   name: juniorinvestor
   appid: juniorinvestor
@@ -82,6 +85,7 @@ metadata:
   version: '{VERSION}'
   categories:
     - Lifestyle
+    - agents
   tags:
     - education
     - investing
@@ -132,7 +136,7 @@ options:
   apiTimeout: 0
   dependencies:
     - name: olares
-      version: '>=1.12.0-0'
+      version: '>=1.12.3-0,<1.12.6'
       type: system
 
 envs:
@@ -168,7 +172,7 @@ metadata:
   labels:
     app: juniorinvestor
 spec:
-  replicas: 1
+  replicas: {{ .Values.workloads.juniorinvestor.replicaCount | default 1 }}
   strategy:
     type: Recreate
   selector:
@@ -270,12 +274,12 @@ def build(kind: str) -> str:
     llm = (os.environ.get("PERSONAL_LLM_BASE_URL", ""), os.environ.get("PERSONAL_LLM_MODEL", "")) if kind == "personal" else ("", "")
     w = lambda p, s: open(os.path.join(out, p), "w").write(s)  # noqa: E731
     w("Chart.yaml", f"apiVersion: v2\nname: juniorinvestor\ndescription: Junior Investor - kids investment learning and paper trading\ntype: application\nversion: '{VERSION}'\nappVersion: '{VERSION}'\n")
-    w("values.yaml", "# Olares injects userspace / olaresEnv values at install time.\n")
+    w("values.yaml", "# Olares injects userspace / olaresEnv values at install time.\nworkloads:\n  juniorinvestor:\n    replicaCount: 1\n")
     w("OlaresManifest.yaml", manifest("en", *llm))
     for loc, lang in (("en-US", "en"), ("zh-CN", "zh")):
         os.makedirs(os.path.join(out, "i18n", loc))
         w(os.path.join("i18n", loc, "OlaresManifest.yaml"), manifest(lang, *llm))
-    w("owners", GH_USER + "\n")
+    w("owners", f"owners:\n- {GH_USER}\n")
     w(os.path.join("templates", "deployment.yaml"), DEPLOYMENT.replace("IMAGE_PLACEHOLDER", IMAGE))
     w(os.path.join("templates", "service.yaml"), SERVICE)
     return out
