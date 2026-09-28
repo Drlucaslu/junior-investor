@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 
-from app.api import ai, learn, market, portfolio, profiles, system
+from app.api import ai, learn, market, path, portfolio, profiles, system
 from app.config import get_settings
 from app.db import SessionLocal
 from app.models import AppSetting, MasterPersona
@@ -96,6 +96,7 @@ app.include_router(market.router, prefix=API, tags=["market"])
 app.include_router(portfolio.router, prefix=API, tags=["portfolio"])
 app.include_router(ai.router, prefix=API, tags=["ai"])
 app.include_router(learn.router, prefix=API, tags=["learn"])
+app.include_router(path.router, prefix=API, tags=["learning-path"])
 
 
 @app.get("/healthz", include_in_schema=False)

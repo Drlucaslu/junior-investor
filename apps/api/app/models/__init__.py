@@ -77,16 +77,25 @@ class ChildProfile(Base):
     allow_fractional: Mapped[bool] = mapped_column(Boolean, default=False)
     daily_ai_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = unlimited
     daily_minutes_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Learning path (v0.4): parents may start an older child at a higher level.
+    level_override: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Family (private) account asset access: "all" = stocks & ETFs, "level" = follow the learning level.
+    family_access: Mapped[str] = mapped_column(String(8), default="all", server_default="all")
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
-    account: Mapped["SimulationAccount"] = relationship(back_populates="profile", uselist=False)
 
 
 class SimulationAccount(Base):
+    """Each child has two accounts:
+    * ``learning`` — the gamified portfolio; size and allowed assets grow with the learning level.
+    * ``family``   — the private account funded by parents (starting cash, pocket-money top-ups)."""
+
     __tablename__ = "simulation_accounts"
+    __table_args__ = (UniqueConstraint("profile_id", "kind", name="uq_account_kind"),)
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
-    profile_id: Mapped[str] = mapped_column(ForeignKey("child_profiles.id"), unique=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("child_profiles.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(16), default="family", server_default="family")
     base_currency: Mapped[str] = mapped_column(String(3), default="USD")
     starting_cash: Mapped[Decimal] = mapped_column(MONEY)
     # Each reset starts a new epoch. Old ledger rows are kept (history is never
@@ -96,13 +105,12 @@ class SimulationAccount(Base):
     reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_corporate_action_check: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    profile: Mapped[ChildProfile] = relationship(back_populates="account")
-
 
 class Trade(Base):
     __tablename__ = "trades"
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
     profile_id: Mapped[str] = mapped_column(ForeignKey("child_profiles.id"), index=True)
+    account_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     epoch: Mapped[int] = mapped_column(Integer, default=1)
     symbol: Mapped[str] = mapped_column(String(16), index=True)
     side: Mapped[str] = mapped_column(String(4))  # BUY | SELL
@@ -124,9 +132,10 @@ class Trade(Base):
 
 class LedgerEntry(Base):
     __tablename__ = "ledger_entries"
-    __table_args__ = (UniqueConstraint("profile_id", "epoch", "reference_id", "type", name="uq_ledger_ref"),)
+    __table_args__ = (UniqueConstraint("account_id", "epoch", "reference_id", "type", name="uq_ledger_ref"),)
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
     profile_id: Mapped[str] = mapped_column(ForeignKey("child_profiles.id"), index=True)
+    account_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     epoch: Mapped[int] = mapped_column(Integer, default=1, index=True)
     seq: Mapped[int] = mapped_column(Integer, default=0)  # strict ordering within a profile
     type: Mapped[str] = mapped_column(String(32))
@@ -266,3 +275,94 @@ class LearningProgress(Base):
     profile_id: Mapped[str] = mapped_column(ForeignKey("child_profiles.id"), index=True)
     card_id: Mapped[str] = mapped_column(String(64))
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+# ---------------------------------------------------------------- v0.4 learning path
+
+class Deposit(Base):
+    """A simulated Certificate of Deposit (CD, 定期存单): fixed rate, fixed term."""
+
+    __tablename__ = "deposits"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("child_profiles.id"), index=True)
+    account_id: Mapped[str] = mapped_column(String(32), index=True)
+    epoch: Mapped[int] = mapped_column(Integer, default=1)
+    principal: Mapped[Decimal] = mapped_column(MONEY)
+    apy: Mapped[Decimal] = mapped_column(Numeric(10, 6))  # 0.0425 = 4.25% per year
+    term_months: Mapped[int] = mapped_column(Integer)
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    matures_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(10), default="OPEN")  # OPEN | MATURED | BROKEN
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    payout: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+
+
+class OptionPosition(Base):
+    """Simplified options: covered calls (sell) and protective puts (buy), 100 shares per contract."""
+
+    __tablename__ = "option_positions"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("child_profiles.id"), index=True)
+    account_id: Mapped[str] = mapped_column(String(32), index=True)
+    epoch: Mapped[int] = mapped_column(Integer, default=1)
+    underlying: Mapped[str] = mapped_column(String(16))
+    right: Mapped[str] = mapped_column(String(4))  # CALL | PUT
+    strategy: Mapped[str] = mapped_column(String(16))  # covered_call | protective_put
+    strike: Mapped[Decimal] = mapped_column(MONEY)
+    expiry: Mapped[date] = mapped_column(Date)
+    contracts: Mapped[int] = mapped_column(Integer)
+    open_premium: Mapped[Decimal] = mapped_column(MONEY)  # per share
+    open_underlying_price: Mapped[Decimal] = mapped_column(MONEY)
+    volatility: Mapped[Decimal] = mapped_column(Numeric(10, 6))
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    status: Mapped[str] = mapped_column(String(10), default="OPEN")  # OPEN | CLOSED | EXPIRED | EXERCISED
+    close_premium: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    settlement_price: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    realized_pnl: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    journal_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AllowanceSchedule(Base):
+    """Parent-defined pocket-money top-up into the child's family account."""
+
+    __tablename__ = "allowance_schedules"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("child_profiles.id"), unique=True)
+    amount: Mapped[Decimal] = mapped_column(MONEY)
+    frequency: Mapped[str] = mapped_column(String(8), default="monthly")  # weekly | monthly
+    weekday: Mapped[int] = mapped_column(Integer, default=0)  # 0 = Monday (weekly)
+    day_of_month: Mapped[int] = mapped_column(Integer, default=1)  # 1..28 (monthly)
+    start_date: Mapped[date] = mapped_column(Date)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_run_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    note: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+
+
+class ScenarioRun(Base):
+    """One play-through of a historical "time machine" scenario."""
+
+    __tablename__ = "scenario_runs"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("child_profiles.id"), index=True)
+    scenario_id: Mapped[str] = mapped_column(String(32), index=True)
+    status: Mapped[str] = mapped_column(String(8), default="active")  # active | done
+    step: Mapped[int] = mapped_column(Integer, default=0)
+    decisions: Mapped[list] = mapped_column(JSON, default=list)
+    result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class XPEvent(Base):
+    """Learning points. Idempotent per (profile, kind, ref)."""
+
+    __tablename__ = "xp_events"
+    __table_args__ = (UniqueConstraint("profile_id", "kind", "ref", name="uq_xp_event"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("child_profiles.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(24))
+    ref: Mapped[str] = mapped_column(String(96))
+    points: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)

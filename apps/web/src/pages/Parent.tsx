@@ -73,7 +73,7 @@ function ParentDashboard() {
         overview.loading && !overview.data ? <div className="grid gap-4">{[0, 1].map((i) => <Skeleton key={i} className="h-72" />)}</div>
           : overview.error ? <ErrorState error={overview.error} onRetry={overview.reload} />
             : !overview.data?.profiles.length ? <EmptyState icon={<Users />} title={t("parent.noChildren")} action={<Button size="sm" onClick={() => setTab("manage")}><Plus /> {t("parent.createProfile")}</Button>} />
-              : <div className="grid gap-5">{overview.data.profiles.map((c) => <ChildOverview key={c.profile.id} c={c} />)}</div>
+              : <div className="grid gap-5">{overview.data.profiles.map((c) => <ChildOverview key={c.profile.id} c={c} onChanged={() => void overview.reload()} />)}</div>
       )}
       {tab === "manage" && <ManageProfiles onChanged={() => void overview.reload()} />}
       {tab === "security" && <SecuritySettings />}
@@ -85,7 +85,7 @@ function rate(v: number | null): string {
   return v === null ? "—" : fmtPct(v, { decimals: 0 });
 }
 
-function ChildOverview({ c }: { c: ParentChildOverview }) {
+function ChildOverview({ c, onChanged }: { c: ParentChildOverview; onChanged: () => void }) {
   const { t } = useTranslation();
   const s = c.stats;
   const stats: [string, string][] = [
@@ -117,6 +117,7 @@ function ChildOverview({ c }: { c: ParentChildOverview }) {
             <Mini label={t("portfolio.positions")} value={fmtNumber(c.portfolio.positions, 0)} />
           </div>
         ) : <p className="text-sm text-muted-foreground">{t("parent.portfolioUnavailable")}</p>}
+        <ChildLearningControls c={c} onChanged={onChanged} />
         <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3">
           {stats.map(([k, v]) => (
             <div key={k} className="border-b pb-2">
@@ -141,6 +142,124 @@ function ChildOverview({ c }: { c: ParentChildOverview }) {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function ChildLearningControls({ c, onChanged }: { c: ParentChildOverview; onChanged: () => void }) {
+  const { t } = useTranslation();
+  const toast = useToast();
+  const { refreshProfiles, refreshPath, refreshPortfolio } = useApp();
+  const p = c.profile;
+  const a = c.allowance;
+  const [amount, setAmount] = useState(a ? String(a.amount) : "20");
+  const [freq, setFreq] = useState<"weekly" | "monthly">(a?.frequency ?? "weekly");
+  const [weekday, setWeekday] = useState(a?.weekday ?? 5);
+  const [dom, setDom] = useState(a?.day_of_month ?? 1);
+  const [enabled, setEnabled] = useState(a?.enabled ?? true);
+  const [dep, setDep] = useState("");
+  const [depNote, setDepNote] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const run = async (key: string, fn: () => Promise<unknown>, ok: string) => {
+    setBusy(key);
+    try {
+      await fn();
+      toast.push("success", ok);
+      onChanged();
+      void refreshProfiles();
+      void refreshPath();
+      void refreshPortfolio();
+    } catch (e) {
+      toast.push("error", errorText(t, e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const learning = c.accounts?.learning;
+  const family = c.accounts?.family;
+  return (
+    <div className="space-y-4 rounded-xl border p-4">
+      <p className="text-sm font-semibold">{t("parent.learningTitle")}</p>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Mini label={t("parent.level")} value={c.learning.level != null ? `Lv${c.learning.level}` : "—"} />
+        <Mini label={t("parent.xp")} value={`${c.learning.xp.week} / ${c.learning.xp.total}`} />
+        <Mini label={t("accounts.learning")} value={learning ? fmtMoney(learning.total_equity, { decimals: 0 }) : "—"} />
+        <Mini label={t("accounts.family")} value={family ? fmtMoney(family.total_equity, { decimals: 0 }) : "—"} />
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label={t("parent.levelOverride")} htmlFor={`lvl-${p.id}`} hint={t("parent.levelOverrideHint")}>
+          <Select id={`lvl-${p.id}`} value={p.level_override ?? ""} disabled={busy === "lvl"}
+            onChange={(e) => void run("lvl", () => api.patchProfile(p.id, e.target.value ? { level_override: Number(e.target.value) } : { clear_level_override: true }, true), t("parent.saved"))}>
+            <option value="">{t("parent.levelAuto")}</option>
+            {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{t("path.levelN", { n })}</option>)}
+          </Select>
+        </Field>
+        <Field label={t("parent.familyAccess")} htmlFor={`fa-${p.id}`}>
+          <Select id={`fa-${p.id}`} value={p.family_access} disabled={busy === "fa"}
+            onChange={(e) => void run("fa", () => api.patchProfile(p.id, { family_access: e.target.value as "all" | "level" }, true), t("parent.saved"))}>
+            <option value="all">{t("parent.familyAccessAll")}</option>
+            <option value="level">{t("parent.familyAccessLevel")}</option>
+          </Select>
+        </Field>
+      </div>
+      <div className="rounded-lg bg-muted/40 p-3">
+        <p className="text-sm font-medium">{t("allowance.title")}</p>
+        <p className="mb-2 text-xs text-muted-foreground">{t("allowance.subtitle", { name: p.nickname })}</p>
+        <div className="grid gap-3 sm:grid-cols-4">
+          <Field label={t("allowance.amount")} htmlFor={`al-a-${p.id}`}>
+            <Input id={`al-a-${p.id}`} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ""))} />
+          </Field>
+          <Field label={t("allowance.frequency")} htmlFor={`al-f-${p.id}`}>
+            <Select id={`al-f-${p.id}`} value={freq} onChange={(e) => setFreq(e.target.value as "weekly" | "monthly")}>
+              <option value="weekly">{t("allowance.weekly")}</option>
+              <option value="monthly">{t("allowance.monthly")}</option>
+            </Select>
+          </Field>
+          {freq === "weekly" ? (
+            <Field label={t("allowance.weekday")} htmlFor={`al-w-${p.id}`}>
+              <Select id={`al-w-${p.id}`} value={weekday} onChange={(e) => setWeekday(Number(e.target.value))}>
+                {[0, 1, 2, 3, 4, 5, 6].map((d) => <option key={d} value={d}>{t(`allowance.days.d${d}`)}</option>)}
+              </Select>
+            </Field>
+          ) : (
+            <Field label={t("allowance.dayOfMonth")} htmlFor={`al-d-${p.id}`}>
+              <Select id={`al-d-${p.id}`} value={dom} onChange={(e) => setDom(Number(e.target.value))}>
+                {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => <option key={d} value={d}>{d}</option>)}
+              </Select>
+            </Field>
+          )}
+          <div className="flex items-end gap-2">
+            <label className="flex items-center gap-2 pb-2 text-sm"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="accent-[hsl(var(--primary))]" />{t("allowance.enabled")}</label>
+          </div>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Button size="sm" loading={busy === "al"} disabled={!(Number(amount) >= 0)}
+            onClick={() => void run("al", () => api.saveAllowance(p.id, { amount: Number(amount), frequency: freq, weekday, day_of_month: dom, enabled }), t("allowance.saved"))}>
+            {t("allowance.save")}
+          </Button>
+          {a && <Button size="sm" variant="ghost" loading={busy === "al-del"} onClick={() => void run("al-del", () => api.deleteAllowance(p.id), t("parent.saved"))}>{t("allowance.remove")}</Button>}
+          <span className="text-xs text-muted-foreground">
+            {a?.enabled && a.next_date ? t("allowance.next", { date: a.next_date }) : !a ? t("allowance.none") : ""}
+          </span>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-end gap-2">
+        <Field label={t("allowance.deposit")} htmlFor={`dep-${p.id}`} className="w-32">
+          <Input id={`dep-${p.id}`} inputMode="decimal" value={dep} onChange={(e) => setDep(e.target.value.replace(/[^\d.]/g, ""))} />
+        </Field>
+        <Field label={t("allowance.depositNote")} htmlFor={`depn-${p.id}`} className="min-w-[10rem] flex-1">
+          <Input id={`depn-${p.id}`} value={depNote} maxLength={120} onChange={(e) => setDepNote(e.target.value)} />
+        </Field>
+        <Button size="sm" variant="outline" loading={busy === "dep"} disabled={!(Number(dep) > 0)}
+          onClick={() => void run("dep", async () => { await api.parentDeposit(p.id, Number(dep), depNote || undefined); setDep(""); setDepNote(""); }, t("allowance.deposited"))}>
+          {t("allowance.depositDo")}
+        </Button>
+        <Button size="sm" variant="ghost" className="ml-auto" loading={busy === "rst"}
+          onClick={() => { if (window.confirm(t("parent.resetLearningConfirm", { name: p.nickname }))) void run("rst", () => api.resetPortfolio(p.id, null, "learning"), t("parent.saved")); }}>
+          <RotateCcw /> {t("parent.resetLearning")}
+        </Button>
+      </div>
+    </div>
   );
 }
 

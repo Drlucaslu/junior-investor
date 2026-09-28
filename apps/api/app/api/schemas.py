@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from typing import Literal
 
@@ -42,6 +43,8 @@ class ProfileIn(BaseModel):
     allow_fractional: bool = False
     daily_ai_limit: int | None = Field(None, ge=0, le=10000)
     daily_minutes_limit: int | None = Field(None, ge=0, le=1440)
+    level_override: int | None = Field(None, ge=1, le=5)
+    family_access: Literal["all", "level"] = "all"
 
 
 class ProfilePatch(BaseModel):
@@ -55,13 +58,20 @@ class ProfilePatch(BaseModel):
     daily_minutes_limit: int | None = Field(None, ge=0, le=1440)
     clear_ai_limit: bool = False
     clear_minutes_limit: bool = False
+    level_override: int | None = Field(None, ge=1, le=5)
+    clear_level_override: bool = False
+    family_access: Literal["all", "level"] | None = None
 
 
 CHILD_EDITABLE = {"language", "avatar"}
 
 
+Account = Literal["learning", "family"]
+
+
 class ResetIn(BaseModel):
     starting_cash: Decimal | None = Field(None, gt=0, le=Decimal("1000000000"))
+    account: Account = "family"
 
 
 class TradeIn(BaseModel):
@@ -71,6 +81,7 @@ class TradeIn(BaseModel):
     journal_content: str | None = Field(None, max_length=5000)
     journal_answers: dict[str, str] | None = None
     research_id: str | None = None
+    account: Account = "family"
 
 
 class WatchIn(BaseModel):
@@ -137,3 +148,45 @@ class AIConfigIn(BaseModel):
         if not (v.startswith("http://") or v.startswith("https://")):
             raise ValueError("base_url must start with http:// or https://")
         return v.rstrip("/")
+
+
+# ---------------------------------------------------------------- v0.4 learning path
+
+class CardCompleteIn(BaseModel):
+    answer: int | None = Field(None, ge=0, le=10)
+
+
+class CDIn(BaseModel):
+    account: Account = "learning"
+    amount: Decimal = Field(gt=0, le=Decimal("1000000000"))
+    term_months: int = Field(ge=1, le=60)
+
+
+class OptionIn(BaseModel):
+    account: Account = "learning"
+    symbol: str = Field(min_length=1, max_length=16)
+    strategy: Literal["covered_call", "protective_put"]
+    strike: Decimal = Field(gt=0)
+    expiry: str = Field(min_length=10, max_length=10)
+    contracts: int = Field(ge=1, le=1000)
+    journal_content: str | None = Field(None, max_length=5000)
+
+
+class AllowanceIn(BaseModel):
+    amount: Decimal = Field(ge=0, le=Decimal("1000000"))
+    frequency: Literal["weekly", "monthly"] = "monthly"
+    weekday: int = Field(0, ge=0, le=6)
+    day_of_month: int = Field(1, ge=1, le=28)
+    start_date: date | None = None
+    enabled: bool = True
+    note: str | None = Field(None, max_length=120)
+
+
+class DepositIn(BaseModel):
+    amount: Decimal = Field(gt=0, le=Decimal("100000000"))
+    note: str | None = Field(None, max_length=120)
+
+
+class ScenarioDecisionIn(BaseModel):
+    allocations: dict[str, float]
+    reason: str = Field("", max_length=1000)

@@ -11,9 +11,9 @@ from sqlalchemy.orm import Session
 from app.api.deps import err, get_profile
 from app.api.schemas import JournalIn, TradeIn, WatchIn
 from app.db import get_db
-from app.models import ChildProfile, JournalEntry, LedgerEntry, ResearchReport, Trade, WatchlistItem
+from app.models import AllowanceSchedule, ChildProfile, JournalEntry, LedgerEntry, ResearchReport, Trade, WatchlistItem
 from app.providers.types import ProviderError
-from app.services import market_data
+from app.services import allowance, learning, market_data
 from app.services.corporate_actions import apply_corporate_actions
 from app.services.observability import incr, timed
 from app.services.portfolio import compute_portfolio, current_account
@@ -27,25 +27,55 @@ def trade_out(t: Trade) -> dict:
     return {c.name: getattr(t, c.name) for c in Trade.__table__.columns}
 
 
-@router.get("/portfolio")
-def portfolio(p: ChildProfile = Depends(get_profile), db: Session = Depends(get_db)):
+AccountQ = Query("family", pattern="^(learning|family)$")
+
+
+def _housekeeping(db: Session, p: ChildProfile) -> None:
+    try:
+        learning.sync(db, p)
+    except Exception as e:  # never block the portfolio view
+        log.warning("learning sync failed: %s", e)
+        db.rollback()
     try:
         apply_corporate_actions(db, p)
-    except Exception as e:  # never block the portfolio view
+    except Exception as e:
         log.warning("corporate action check failed: %s", e)
+        db.rollback()
+
+
+@router.get("/portfolio")
+def portfolio(p: ChildProfile = Depends(get_profile), db: Session = Depends(get_db), account: str = AccountQ):
+    _housekeeping(db, p)
     with timed("api.portfolio"):
-        return compute_portfolio(db, p.id, market_data.get_quote)
+        return compute_portfolio(db, p.id, market_data.get_quote, account)
+
+
+@router.get("/accounts")
+def accounts(p: ChildProfile = Depends(get_profile), db: Session = Depends(get_db)):
+    """Both accounts at a glance (learning = gamified portfolio, family = parent-funded private account)."""
+    _housekeeping(db, p)
+    out = {}
+    for kind in ("learning", "family"):
+        pf = compute_portfolio(db, p.id, market_data.get_quote, kind)
+        out[kind] = {k: pf[k] for k in ("account_id", "account_kind", "total_equity", "cash", "market_value", "cd_value", "option_value",
+                                         "total_pnl", "total_return_pct", "today_pnl", "today_return_pct", "contributions", "starting_cash")}
+        out[kind]["positions"] = len(pf["positions"])
+    sched = db.scalar(select(AllowanceSchedule).where(AllowanceSchedule.profile_id == p.id))
+    out["allowance"] = allowance.schedule_out(sched)
+    return out
 
 
 @router.get("/positions")
-def positions(p: ChildProfile = Depends(get_profile), db: Session = Depends(get_db)):
-    return compute_portfolio(db, p.id, market_data.get_quote)["positions"]
+def positions(p: ChildProfile = Depends(get_profile), db: Session = Depends(get_db), account: str = AccountQ):
+    return compute_portfolio(db, p.id, market_data.get_quote, account)["positions"]
 
 
 @router.get("/trades")
 def trades(p: ChildProfile = Depends(get_profile), db: Session = Depends(get_db), symbol: str | None = None,
-           include_rejected: bool = False, limit: int = Query(200, le=1000)):
+           include_rejected: bool = False, limit: int = Query(200, le=1000), account: str | None = Query(None, pattern="^(learning|family)$")):
     stmt = select(Trade).where(Trade.profile_id == p.id)
+    if account:
+        stmt = stmt.where(Trade.account_id == current_account(db, p.id, account).id)
     if not include_rejected:
         stmt = stmt.where(Trade.status == "EXECUTED")
     if symbol:
@@ -54,9 +84,9 @@ def trades(p: ChildProfile = Depends(get_profile), db: Session = Depends(get_db)
 
 
 @router.get("/ledger")
-def ledger(p: ChildProfile = Depends(get_profile), db: Session = Depends(get_db), all_epochs: bool = False):
-    acct = current_account(db, p.id)
-    stmt = select(LedgerEntry).where(LedgerEntry.profile_id == p.id)
+def ledger(p: ChildProfile = Depends(get_profile), db: Session = Depends(get_db), all_epochs: bool = False, account: str = AccountQ):
+    acct = current_account(db, p.id, account)
+    stmt = select(LedgerEntry).where(LedgerEntry.account_id == acct.id)
     if not all_epochs:
         stmt = stmt.where(LedgerEntry.epoch == acct.epoch)
     rows = db.scalars(stmt.order_by(desc(LedgerEntry.timestamp), desc(LedgerEntry.seq)).limit(1000))
@@ -71,7 +101,8 @@ def _rejected(e: TradeRejected):
 @router.post("/trades/preview")
 def trades_preview(body: TradeIn, p: ChildProfile = Depends(get_profile), db: Session = Depends(get_db)):
     try:
-        return preview_trade(db, p, body.symbol, body.side, body.quantity)
+        learning.ensure_accounts(db, p)
+        return preview_trade(db, p, body.symbol, body.side, body.quantity, body.account)
     except TradeRejected as e:
         raise _rejected(e) from e
 
@@ -83,7 +114,9 @@ def trades_execute(body: TradeIn, p: ChildProfile = Depends(get_profile), db: Se
         journal = {"content": body.journal_content or "", "answers": body.journal_answers}
     try:
         with timed("api.trade_execute"):
-            t = execute_trade(db, p, body.symbol, body.side, body.quantity, journal=journal, research_id=body.research_id)
+            learning.ensure_accounts(db, p)
+            t = execute_trade(db, p, body.symbol, body.side, body.quantity, journal=journal, research_id=body.research_id,
+                              kind=body.account)
     except TradeRejected as e:
         incr("trades.rejected")
         raise _rejected(e) from e
@@ -177,4 +210,6 @@ def add_journal(body: JournalIn, p: ChildProfile = Depends(get_profile), db: Ses
                      research_id=body.research_id, type=body.type, content=body.content, answers=body.answers, context=ctx)
     db.add(j)
     db.commit()
+    if len(body.content.strip()) >= 20:
+        learning.award_capped(db, p.id, "journal", f"journal:{j.id}")
     return journal_out(j)

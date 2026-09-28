@@ -34,6 +34,8 @@ UNIVERSE: dict[str, dict] = {
     "KO": {"name": "The Coca-Cola Company", "price": "65", "type": "EQUITY", "sector": "Consumer Defensive", "rev": 46e9},
     "SPY": {"name": "SPDR S&P 500 ETF Trust", "price": "550", "type": "ETF", "sector": None, "rev": None},
     "QQQ": {"name": "Invesco QQQ Trust", "price": "480", "type": "ETF", "sector": None, "rev": None},
+    "BND": {"name": "Vanguard Total Bond Market ETF", "price": "72", "type": "ETF", "sector": None, "rev": None},
+    "TLT": {"name": "iShares 20+ Year Treasury Bond ETF", "price": "90", "type": "ETF", "sector": None, "rev": None},
 }
 
 

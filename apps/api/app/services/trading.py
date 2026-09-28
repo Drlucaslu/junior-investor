@@ -8,7 +8,7 @@ from __future__ import annotations
 import threading
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import func, select
@@ -47,9 +47,10 @@ def _next_seq(db: Session, profile_id: str) -> int:
     return (db.scalar(select(func.max(LedgerEntry.seq)).where(LedgerEntry.profile_id == profile_id)) or 0) + 1
 
 
-def add_ledger(db: Session, profile_id: str, epoch: int, type_: str, amount: Decimal, *, symbol=None, quantity=None,
+def add_ledger(db: Session, profile_id: str, epoch: int, type_: str, amount: Decimal, *, account_id: str, symbol=None, quantity=None,
                price=None, reference_id=None, note=None, timestamp: datetime | None = None, currency="USD") -> LedgerEntry:
-    e = LedgerEntry(profile_id=profile_id, epoch=epoch, seq=_next_seq(db, profile_id), type=type_, amount=q6(Decimal(amount)),
+    e = LedgerEntry(profile_id=profile_id, account_id=account_id, epoch=epoch, seq=_next_seq(db, profile_id), type=type_,
+                    amount=q6(Decimal(amount)),
                     symbol=symbol, quantity=quantity, price=price, reference_id=reference_id, note=note, currency=currency,
                     timestamp=timestamp or datetime.now(timezone.utc))
     db.add(e)
@@ -57,27 +58,35 @@ def add_ledger(db: Session, profile_id: str, epoch: int, type_: str, amount: Dec
     return e
 
 
-def create_account(db: Session, profile: ChildProfile, starting_cash: Decimal) -> SimulationAccount:
-    acct = SimulationAccount(profile_id=profile.id, base_currency=get_settings().default_currency, starting_cash=starting_cash, epoch=1)
+def create_account(db: Session, profile: ChildProfile, starting_cash: Decimal, kind: str = "family") -> SimulationAccount:
+    acct = SimulationAccount(profile_id=profile.id, kind=kind, base_currency=get_settings().default_currency,
+                             starting_cash=starting_cash, epoch=1)
     db.add(acct)
     db.flush()
-    add_ledger(db, profile.id, 1, "ACCOUNT_INITIALIZATION", starting_cash, reference_id="init:1", note="Initial virtual cash")
+    add_ledger(db, profile.id, 1, "ACCOUNT_INITIALIZATION", starting_cash, account_id=acct.id, reference_id="init:1",
+               note="Initial virtual cash")
     return acct
 
 
-def reset_account(db: Session, profile: ChildProfile, starting_cash: Decimal | None = None) -> SimulationAccount:
-    with _locks[profile.id]:
-        acct = current_account(db, profile.id)
-        new_cash = Decimal(starting_cash) if starting_cash is not None else Decimal(profile.starting_cash)
-        add_ledger(db, profile.id, acct.epoch, "ACCOUNT_RESET", ZERO, reference_id=f"reset:{acct.epoch}",
+def reset_account(db: Session, profile: ChildProfile, starting_cash: Decimal | None = None, kind: str = "family") -> SimulationAccount:
+    from app.data.levels import LEARNING_START_CASH
+
+    acct = current_account(db, profile.id, kind)
+    with _locks[acct.id]:
+        if kind == "learning":
+            new_cash = LEARNING_START_CASH  # level bonuses are credited again by the learning service
+        else:
+            new_cash = Decimal(starting_cash) if starting_cash is not None else Decimal(profile.starting_cash)
+        add_ledger(db, profile.id, acct.epoch, "ACCOUNT_RESET", ZERO, account_id=acct.id, reference_id=f"reset:{acct.epoch}",
                    note=f"Account reset by parent; new epoch {acct.epoch + 1}")
         acct.epoch += 1
         acct.starting_cash = new_cash
         acct.reset_at = datetime.now(timezone.utc)
         acct.last_corporate_action_check = None
-        profile.starting_cash = new_cash
-        add_ledger(db, profile.id, acct.epoch, "ACCOUNT_INITIALIZATION", new_cash, reference_id=f"init:{acct.epoch}",
-                   note="Virtual cash after reset")
+        if kind == "family":
+            profile.starting_cash = new_cash
+        add_ledger(db, profile.id, acct.epoch, "ACCOUNT_INITIALIZATION", new_cash, account_id=acct.id,
+                   reference_id=f"init:{acct.epoch}", note="Virtual cash after reset")
         db.commit()
         return acct
 
@@ -94,16 +103,24 @@ def _validate_qty(profile: ChildProfile, qty: Decimal) -> Decimal:
     return qty.quantize(Decimal("0.000001"))
 
 
-def _check_asset_allowed(profile: ChildProfile, symbol: str) -> None:
-    try:
-        prof = market_data.get_company_profile(symbol)
-    except ProviderError:
-        return  # asset-type check is best effort; the quote check below still applies
-    qt = (prof.quote_type or "").upper()
-    if qt and qt not in ("EQUITY", "ETF"):
-        raise TradeRejected("ASSET_TYPE_NOT_SUPPORTED", {"quote_type": qt})
-    if qt == "ETF" and not profile.allow_etf:
+def _check_asset_allowed(db: Session, profile: ChildProfile, acct: SimulationAccount, symbol: str, side: str) -> str | None:
+    """Unsupported types are always rejected; locked asset classes only block BUYs
+    (a child can always sell what they already own)."""
+    from app.services import learning
+    from app.services.assets import classify
+
+    cls = classify(symbol)
+    if cls is None:
+        raise TradeRejected("ASSET_TYPE_NOT_SUPPORTED")
+    if side.upper() != "BUY":
+        return cls
+    if cls in ("equity_etf", "bond_etf") and not profile.allow_etf:
         raise TradeRejected("ETF_NOT_ALLOWED")
+    allowed = learning.allowed_assets(db, profile, acct.kind)
+    if cls not in allowed:
+        raise TradeRejected("ASSET_LOCKED", {"asset_class": cls, "unlock_level": learning.unlock_level(cls),
+                                              "account": acct.kind})
+    return cls
 
 
 def price_order(profile: ChildProfile, symbol: str, side: str, quantity: Decimal) -> PricedOrder:
@@ -133,9 +150,10 @@ def price_order(profile: ChildProfile, symbol: str, side: str, quantity: Decimal
     return PricedOrder(sym, side, qty, quote, px, gross, fee, cash_delta)
 
 
-def _check_funds(db: Session, profile: ChildProfile, order: PricedOrder) -> dict:
-    acct = current_account(db, profile.id)
-    st = replay(ledger_entries(db, profile.id, acct.epoch))
+def _check_funds(db: Session, acct: SimulationAccount, order: PricedOrder) -> dict:
+    from app.services.products import locked_shares
+
+    st = replay(ledger_entries(db, acct))
     held = st.lots.get(order.symbol).quantity if order.symbol in st.lots else ZERO
     if order.side == "BUY":
         required = order.gross_value + order.fee
@@ -144,13 +162,26 @@ def _check_funds(db: Session, profile: ChildProfile, order: PricedOrder) -> dict
     else:
         if order.quantity > held:
             raise TradeRejected("INSUFFICIENT_POSITION", {"requested": str(order.quantity), "held": str(held)})
+        locked = locked_shares(db, acct, order.symbol)
+        if locked and order.quantity > held - locked:
+            raise TradeRejected("SHARES_LOCKED_BY_CALL", {"requested": str(order.quantity), "held": str(held), "locked": str(locked)})
     return {"acct": acct, "state": st, "held": held}
 
 
-def preview_trade(db: Session, profile: ChildProfile, symbol: str, side: str, quantity) -> dict:
-    _check_asset_allowed(profile, symbol)
+def recent_trade_count(db: Session, acct: SimulationAccount, days: int = 7) -> int:
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    return db.scalar(select(func.count(Trade.id)).where(Trade.account_id == acct.id, Trade.status == "EXECUTED",
+                                                         Trade.executed_at >= since)) or 0
+
+
+def preview_trade(db: Session, profile: ChildProfile, symbol: str, side: str, quantity, kind: str = "family") -> dict:
+    from app.data.levels import FREQUENT_TRADES_7D
+
+    acct = current_account(db, profile.id, kind)
+    asset_class = _check_asset_allowed(db, profile, acct, symbol, side)
     order = price_order(profile, symbol, side, Decimal(str(quantity)))
-    ctx = _check_funds(db, profile, order)
+    ctx = _check_funds(db, acct, order)
+    recent = recent_trade_count(db, acct)
     st = ctx["state"]
     cash_after = st.cash + order.cash_delta
     # Estimate equity using the order price for this symbol and cost basis for others (fast, no extra quotes).
@@ -180,23 +211,28 @@ def preview_trade(db: Session, profile: ChildProfile, symbol: str, side: str, qu
         "session": order.quote.session,
         "market_status": market_status,
         "market_closed_notice": order.quote.session != "regular",
+        "account": acct.kind,
+        "asset_class": asset_class,
+        "trades_last_7d": recent,
+        "coach_frequent_trading": recent >= FREQUENT_TRADES_7D,
         "simulation": True,
     }
 
 
 def execute_trade(db: Session, profile: ChildProfile, symbol: str, side: str, quantity, *, journal: dict | None = None,
-                  research_id: str | None = None) -> Trade:
+                  research_id: str | None = None, kind: str = "family") -> Trade:
     """Execute a simulated market order. Re-prices at execution time, validates
-    funds under a per-profile lock, and writes Trade + Ledger atomically."""
-    with _locks[profile.id]:
-        acct = db.scalar(select(SimulationAccount).where(SimulationAccount.profile_id == profile.id).with_for_update())
-        trade = Trade(profile_id=profile.id, epoch=acct.epoch if acct else 1, symbol=market_data.norm(symbol), side=side.upper(),
+    funds under a per-account lock, and writes Trade + Ledger atomically."""
+    acct0 = current_account(db, profile.id, kind)
+    with _locks[acct0.id]:
+        acct = db.scalar(select(SimulationAccount).where(SimulationAccount.id == acct0.id).with_for_update())
+        trade = Trade(profile_id=profile.id, account_id=acct.id, epoch=acct.epoch, symbol=market_data.norm(symbol), side=side.upper(),
                       quantity=Decimal(str(quantity)) if _is_num(quantity) else ZERO, research_id=research_id,
                       journal_note=(journal or {}).get("content"))
         try:
-            _check_asset_allowed(profile, symbol)
+            _check_asset_allowed(db, profile, acct, symbol, side)
             order = price_order(profile, symbol, side, Decimal(str(quantity)))
-            _check_funds(db, profile, order)
+            _check_funds(db, acct, order)
         except TradeRejected as rej:
             trade.status = "REJECTED"
             trade.reject_reason = rej.code
@@ -216,10 +252,10 @@ def execute_trade(db: Session, profile: ChildProfile, symbol: str, side: str, qu
         db.add(trade)
         db.flush()
         if order.side == "SELL":
-            st = replay(ledger_entries(db, profile.id, acct.epoch))
+            st = replay(ledger_entries(db, acct))
             avg = st.lots[order.symbol].average_cost
             trade.realized_pnl = q6(order.cash_delta - order.quantity * avg)
-        add_ledger(db, profile.id, acct.epoch, order.side, order.cash_delta, symbol=order.symbol,
+        add_ledger(db, profile.id, acct.epoch, order.side, order.cash_delta, account_id=acct.id, symbol=order.symbol,
                    quantity=order.quantity if order.side == "BUY" else -order.quantity, price=order.execution_price,
                    reference_id=f"trade:{trade.id}", timestamp=now)
         if journal and (journal.get("content") or journal.get("answers")):
@@ -227,8 +263,12 @@ def execute_trade(db: Session, profile: ChildProfile, symbol: str, side: str, qu
                                 type="pre_trade" if order.side == "BUY" else "post_trade", content=journal.get("content") or "",
                                 answers=journal.get("answers"),
                                 context={"price": str(order.execution_price), "side": order.side, "quantity": str(order.quantity),
-                                         "price_timestamp": order.quote.timestamp.isoformat(), "source": order.quote.source}))
+                                         "price_timestamp": order.quote.timestamp.isoformat(), "source": order.quote.source,
+                                         "account": acct.kind}))
         db.commit()
+        if journal and len((journal.get("content") or "").strip()) >= 20:
+            from app.services import learning
+            learning.award_capped(db, profile.id, "journal", f"trade:{trade.id}")
         db.refresh(trade)
         return trade
 

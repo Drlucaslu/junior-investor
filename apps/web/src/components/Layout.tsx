@@ -2,7 +2,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
-  BookOpen, Briefcase, ChevronDown, GraduationCap, Home, LayoutGrid, MessagesSquare, NotebookPen, Search, Settings, Shield,
+  BookOpen, Briefcase, ChevronDown, GraduationCap, History, Home, LayoutGrid, MessagesSquare, NotebookPen, Route, Search, Settings, Shield,
   Telescope, Users, X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -22,17 +22,20 @@ interface NavItem { to: string; key: string; icon: LucideIcon }
 
 const NAV: NavItem[] = [
   { to: "/home", key: "home", icon: Home },
+  { to: "/path", key: "path", icon: Route },
+  { to: "/learn", key: "learn", icon: GraduationCap },
+  { to: "/scenarios", key: "scenarios", icon: History },
   { to: "/masters", key: "masters", icon: MessagesSquare },
   { to: "/research", key: "research", icon: Telescope },
   { to: "/portfolio", key: "portfolio", icon: Briefcase },
   { to: "/watchlist", key: "watchlist", icon: BookOpen },
   { to: "/journal", key: "journal", icon: NotebookPen },
-  { to: "/learn", key: "learn", icon: GraduationCap },
   { to: "/parent", key: "parent", icon: Shield },
   { to: "/settings", key: "settings", icon: Settings },
 ];
-const MOBILE_MAIN = NAV.slice(0, 4);
-const MOBILE_MORE = NAV.slice(4);
+const MOBILE_MAIN_KEYS = ["home", "path", "masters", "portfolio"];
+const MOBILE_MAIN = NAV.filter((n) => MOBILE_MAIN_KEYS.includes(n.key)).sort((a, b) => MOBILE_MAIN_KEYS.indexOf(a.key) - MOBILE_MAIN_KEYS.indexOf(b.key));
+const MOBILE_MORE = NAV.filter((n) => !MOBILE_MAIN_KEYS.includes(n.key));
 
 /** Routes reachable without a selected learner profile. */
 const NO_PROFILE_OK = ["/parent", "/settings"];
@@ -90,6 +93,7 @@ function Sidebar() {
               >
                 <n.icon className="size-5 shrink-0" aria-hidden />
                 <span className="truncate">{t(`nav.${n.key}`)}</span>
+                {n.key === "path" && <LevelPill />}
               </NavLink>
             </li>
           ))}
@@ -100,9 +104,15 @@ function Sidebar() {
   );
 }
 
+function LevelPill() {
+  const { path } = useApp();
+  if (!path) return null;
+  return <span className="ml-auto hidden rounded-full bg-accent-soft px-1.5 text-[0.65rem] font-semibold text-accent-foreground dark:text-accent lg:inline">Lv{path.level}</span>;
+}
+
 function TopBar() {
   const { t } = useTranslation();
-  const { activeProfile, portfolio, refreshPortfolio } = useApp();
+  const { activeProfile, portfolio, refreshPortfolio, account } = useApp();
   const navigate = useNavigate();
   const [searchOpen, setSearchOpen] = useState(false);
   useInterval(() => void refreshPortfolio(), activeProfile ? 60_000 : null);
@@ -127,7 +137,7 @@ function TopBar() {
         </button>
         {activeProfile && portfolio && (
           <Link to="/portfolio" className="hidden flex-col items-end leading-tight lg:flex" title={t("topbar.portfolioValue")}>
-            <span className="text-[0.7rem] text-muted-foreground">{t("topbar.portfolioValue")}</span>
+            <span className="text-[0.7rem] text-muted-foreground">{t(account === "learning" ? "accounts.learning" : "accounts.family")}</span>
             <span className="text-sm font-semibold tabular">{fmtMoney(portfolio.total_equity)}</span>
           </Link>
         )}

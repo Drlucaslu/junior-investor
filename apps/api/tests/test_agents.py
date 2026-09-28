@@ -190,7 +190,12 @@ def test_explain_glossary_and_stream(client, profile):
 def test_learn_cards_and_progress(client, profile):
     cards = client.get(f"{API}/learn/cards").json()
     assert len(cards) >= 20
-    client.post(f"{API}/profiles/{profile['id']}/learn/{cards[0]['id']}/complete")
+    q = cards[0]["quiz"]
+    wrong = client.post(f"{API}/profiles/{profile['id']}/learn/{cards[0]['id']}/complete", json={"answer": (q["answer"] + 1) % 4})
+    assert wrong.json()["correct"] is False
+    assert client.get(f"{API}/profiles/{profile['id']}/learn/progress").json() == []
+    ok = client.post(f"{API}/profiles/{profile['id']}/learn/{cards[0]['id']}/complete", json={"answer": q["answer"]})
+    assert ok.json()["correct"] is True and ok.json()["xp_awarded"] == 10
     assert client.get(f"{API}/profiles/{profile['id']}/learn/progress").json()[0]["card_id"] == cards[0]["id"]
 
 

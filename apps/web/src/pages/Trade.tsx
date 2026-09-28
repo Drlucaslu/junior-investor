@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, CheckCircle2, Clock, Info, Lightbulb, NotebookPen, ShieldCheck, Telescope } from "lucide-react";
-import { api } from "@/lib/api";
+import { ArrowLeft, CheckCircle2, Clock, Hourglass, Info, Lightbulb, Lock, NotebookPen, ShieldCheck, Telescope } from "lucide-react";
+import { api, ApiError } from "@/lib/api";
+import { AccountSwitcher } from "@/components/AccountSwitcher";
 import { errorText } from "@/lib/errorText";
 import { fmtMoney, fmtPct, fmtQty, fmtTime } from "@/lib/format";
 import type { Side, Trade, TradePreview } from "@/lib/types";
@@ -30,7 +31,9 @@ export default function TradePage() {
   const [params] = useSearchParams();
   const { t } = useTranslation();
   const profile = useProfile();
-  const { setup, portfolio, refreshPortfolio } = useApp();
+  const { setup, portfolio: ctxPortfolio, refreshPortfolio, account } = useApp();
+  const portfolio = ctxPortfolio && ctxPortfolio.account_kind === account ? ctxPortfolio : null;
+  const [locked, setLocked] = useState<{ asset: string; level: number } | null>(null);
   const toast = useToast();
   useDocumentTitle(`${t("trade.title")} · ${symbol}`);
 
@@ -76,15 +79,18 @@ export default function TradePage() {
   const doPreview = async (e: FormEvent) => {
     e.preventDefault();
     setErr(null);
+    setLocked(null);
     if (!validateQty()) return;
     setBusy(true);
     try {
-      const p = await api.previewTrade(profile.id, { symbol, side, quantity: qtyNum });
+      const p = await api.previewTrade(profile.id, { symbol, side, quantity: qtyNum, account });
       setPreview(p);
       setStage("confirm");
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e2) {
-      setErr(errorText(t, e2));
+      if (e2 instanceof ApiError && e2.code === "ASSET_LOCKED") {
+        setLocked({ asset: String(e2.detail.asset_class ?? "stock"), level: Number(e2.detail.unlock_level ?? 0) });
+      } else setErr(errorText(t, e2));
     } finally {
       setBusy(false);
     }
@@ -95,7 +101,7 @@ export default function TradePage() {
     setBusy(true);
     try {
       const tr = await api.executeTrade(profile.id, {
-        symbol, side, quantity: qtyNum,
+        symbol, side, quantity: qtyNum, account,
         journal_content: journalContent || null,
         journal_answers: Object.keys(journalAnswers).length ? journalAnswers : null,
         research_id: linkedResearch?.id ?? null,
@@ -158,6 +164,12 @@ export default function TradePage() {
           <div className="p-5 sm:p-6">
             <h1 className="text-lg font-semibold">{t("trade.confirmTitle")}</h1>
             <p className="mt-1 text-sm text-muted-foreground">{t("trade.noRealMoney")}</p>
+            <p className="mt-2 text-sm"><span className="text-muted-foreground">{t("trade.account")}:</span> <b>{t(`accounts.${preview.account}`)}</b></p>
+            {preview.coach_frequent_trading && (
+              <Alert variant="warning" className="mt-4" icon={<Hourglass className="size-4 text-warning" aria-hidden />} title={t("coach.frequentTitle")}>
+                {t("coach.frequent", { n: preview.trades_last_7d })}
+              </Alert>
+            )}
             {preview.market_closed_notice && (
               <Alert variant="warning" className="mt-4" icon={<Clock className="size-4 text-warning" aria-hidden />}>{t("trade.marketClosed")}</Alert>
             )}
@@ -203,6 +215,7 @@ export default function TradePage() {
         {quote.data && <div className="text-right"><p className="text-xl font-semibold tabular">{fmtMoney(quote.data.price)}</p><Change value={quote.data.change} pct={quote.data.change_pct} /></div>}
       </div>
 
+      <AccountSwitcher className="mb-5" />
       {!research.loading && doneResearch.length === 0 && !researchParam && (
         <Alert variant="info" className="mb-5" icon={<Lightbulb className="size-4 text-accent" aria-hidden />}
           action={<Link to={`/research?q=${encodeURIComponent(symbol)}`} className={buttonVariants({ variant: "secondary", size: "sm" })}>{t("trade.nudgeCta", { symbol })}</Link>}>
@@ -259,6 +272,12 @@ export default function TradePage() {
 
         <div className="lg:col-span-5">
           {err && <Alert variant="danger" className="mb-3">{err}</Alert>}
+          {locked && (
+            <Alert variant="warning" className="mb-3" icon={<Lock className="size-4 text-warning" aria-hidden />} title={t("coach.lockedTitle")}
+              action={<Link to="/path" className={buttonVariants({ variant: "secondary", size: "sm" })}>{t("coach.goPath")}</Link>}>
+              {t("coach.locked", { asset: t(`assets.${locked.asset}`), level: locked.level })}
+            </Alert>
+          )}
           <div className={cn("flex justify-end")}>
             <Button type="submit" size="lg" loading={busy} className="w-full sm:w-auto">
               {busy ? t("trade.previewing") : t("trade.preview")}

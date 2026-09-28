@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ArrowRight, ArrowRightLeft, Lightbulb, MessagesSquare, RefreshCw, Sparkles, Star, Telescope, X } from "lucide-react";
+import { ArrowRight, ArrowRightLeft, GraduationCap, History, Home as HomeIcon, Lightbulb, MessagesSquare, RefreshCw, Sparkles, Star, Telescope, X } from "lucide-react";
+import { PathHero } from "@/pages/Path";
+import { Skeleton } from "@/components/ui/misc";
 import { api } from "@/lib/api";
 import { fmtCashWords, fmtMoney, fmtRelative } from "@/lib/format";
 import { KEYS, local } from "@/lib/storage";
@@ -12,7 +14,6 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Change } from "@/components/Change";
 import { EmptyState, ErrorState, LoadingRows } from "@/components/States";
-import { PortfolioSummary } from "@/components/PortfolioSummary";
 import { TradeLauncher } from "@/components/TradeLauncher";
 import { cn } from "@/lib/utils";
 
@@ -21,7 +22,8 @@ const PROMPTS = ["p1", "p2", "p3", "p4", "p5", "p6"] as const;
 export default function Home() {
   const { t } = useTranslation();
   const profile = useProfile();
-  const { portfolio, portfolioError, refreshPortfolio } = useApp();
+  const { portfolioError, refreshPortfolio, path, language, account, setAccount } = useApp();
+  const accounts = useAsync(() => api.accounts(profile.id), [profile.id]);
   useDocumentTitle(t("nav.home"));
   const [welcomed, setWelcomed] = useState(() => local.get(KEYS.welcomed(profile.id)) === "1");
   const [tradeOpen, setTradeOpen] = useState(false);
@@ -70,23 +72,52 @@ export default function Home() {
         </div>
       )}
 
+      <section aria-labelledby="path-h">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 id="path-h" className="text-base font-semibold">{t("home.pathTitle")}</h2>
+          <Link to="/path" className="text-sm font-medium text-primary hover:underline">{t("home.pathCta")}</Link>
+        </div>
+        {path ? <PathHero path={path} zh={language === "zh-CN"} compact /> : <Skeleton className="h-36" />}
+      </section>
+
       <section aria-labelledby="snap-h">
         <div className="mb-3 flex items-center justify-between">
-          <h2 id="snap-h" className="text-base font-semibold">{t("home.snapshot")}</h2>
+          <h2 id="snap-h" className="text-base font-semibold">{t("home.accountsTitle")}</h2>
           <Link to="/portfolio" className="text-sm font-medium text-primary hover:underline">{t("common.viewAll")}</Link>
         </div>
-        {portfolioError && !portfolio ? (
-          <Card><ErrorState error={portfolioError} onRetry={() => void refreshPortfolio()} compact /></Card>
-        ) : (
-          <PortfolioSummary portfolio={portfolio} loading />
+        {accounts.error && !accounts.data ? (
+          <Card><ErrorState error={accounts.error ?? portfolioError} onRetry={() => { accounts.reload(); void refreshPortfolio(); }} compact /></Card>
+        ) : !accounts.data ? <div className="grid gap-3 sm:grid-cols-2"><Skeleton className="h-28" /><Skeleton className="h-28" /></div> : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {(["learning", "family"] as const).map((k) => {
+              const a = accounts.data![k];
+              return (
+                <Link key={k} to="/portfolio" onClick={() => setAccount(k)}
+                  className={cn("rounded-xl border bg-card p-4 shadow-card transition hover:-translate-y-0.5 hover:shadow-pop", account === k && "border-primary/40")}>
+                  <p className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                    {k === "learning" ? <GraduationCap className="size-4 text-primary" aria-hidden /> : <HomeIcon className="size-4 text-primary" aria-hidden />}
+                    {t(`accounts.${k}`)}
+                  </p>
+                  <p className="mt-1 text-2xl font-semibold tabular">{fmtMoney(a.total_equity)}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
+                    <Change value={a.total_pnl} pct={a.total_return_pct} size="xs" />
+                    <span>{t("snapshot.cash")} {fmtMoney(a.cash, { decimals: 0 })}</span>
+                    {a.contributions > 0 && <span>{t("accounts.contributions")} {fmtMoney(a.contributions, { decimals: 0 })}</span>}
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
         )}
+        {allowanceNote(accounts.data, t)}
       </section>
 
       <section aria-labelledby="qa-h">
         <h2 id="qa-h" className="mb-3 text-base font-semibold">{t("home.quickActions")}</h2>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <QuickAction to="/scenarios" icon={<History />} title={t("home.timeMachine")} desc={t("home.timeMachineDesc")} tone="accent" />
           <QuickAction to="/masters" icon={<MessagesSquare />} title={t("home.askMaster")} desc={t("home.askMasterDesc")} tone="primary" />
-          <QuickAction to="/research" icon={<Telescope />} title={t("home.researchStock")} desc={t("home.researchStockDesc")} tone="accent" />
+          <QuickAction to="/research" icon={<Telescope />} title={t("home.researchStock")} desc={t("home.researchStockDesc")} tone="muted" />
           <QuickAction onClick={() => setTradeOpen(true)} icon={<ArrowRightLeft />} title={t("home.makeTrade")} desc={t("home.makeTradeDesc")} tone="muted" />
         </div>
       </section>
@@ -170,6 +201,12 @@ export default function Home() {
       <TradeLauncher open={tradeOpen} onClose={() => setTradeOpen(false)} />
     </div>
   );
+}
+
+function allowanceNote(data: import("@/lib/types").AccountsOverview | null | undefined, t: (k: string, o?: Record<string, unknown>) => string) {
+  const a = data?.allowance;
+  if (!a || !a.enabled || !a.next_date) return null;
+  return <p className="mt-2 text-xs text-muted-foreground">{t("accounts.nextAllowance", { amount: fmtMoney(a.amount), date: a.next_date })}</p>;
 }
 
 function QuickAction({ to, onClick, icon, title, desc, tone }: {

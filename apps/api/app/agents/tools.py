@@ -46,7 +46,7 @@ TOOL_SCHEMAS: list[dict] = [
         "name": "search_web", "description": "General web search for background information.",
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
     {"type": "function", "function": {
-        "name": "get_portfolio", "description": "The student's own simulated portfolio: cash, positions, P&L.",
+        "name": "get_portfolio", "description": "The student's two simulated accounts (learning_account: unlocked by lessons; family_account: funded by parents): cash, CDs, positions, options, P&L.",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
         "name": "get_position", "description": "The student's simulated position in one ticker.",
@@ -124,14 +124,24 @@ def run_tool_sync(name: str, args: dict, profile_id: str | None) -> ToolResult:
             if name in ("get_portfolio", "get_position"):
                 if not profile_id:
                     return ToolResult(name, args, False, "no profile")
+                pfs = {}
                 with SessionLocal() as db:
-                    pf = compute_portfolio(db, profile_id, market_data.get_quote)
+                    for kind in ("learning", "family"):
+                        try:
+                            pfs[kind] = compute_portfolio(db, profile_id, market_data.get_quote, kind)
+                        except LookupError:
+                            continue
                 if name == "get_position":
-                    pos = next((p for p in pf["positions"] if p["ticker"] == t), None)
-                    return ToolResult(name, args, True, pos or {"ticker": t, "quantity": 0})
-                slim = {k: pf[k] for k in ("cash", "market_value", "total_equity", "total_pnl", "total_return_pct", "largest_position_pct")}
-                slim["positions"] = [{k: p[k] for k in ("ticker", "quantity", "average_cost", "last_price", "unrealized_pnl_pct", "allocation_pct")} for p in pf["positions"]]
-                return ToolResult(name, args, True, json.loads(json.dumps(slim, default=str)))
+                    found = {k: next((p for p in pf["positions"] if p["ticker"] == t), None) for k, pf in pfs.items()}
+                    return ToolResult(name, args, True, json.loads(json.dumps(
+                        {k: v or {"ticker": t, "quantity": 0} for k, v in found.items()}, default=str)))
+                out = {}
+                for kind, pf in pfs.items():
+                    slim = {k: pf[k] for k in ("cash", "market_value", "cd_value", "total_equity", "total_pnl", "total_return_pct", "largest_position_pct")}
+                    slim["positions"] = [{k: p[k] for k in ("ticker", "quantity", "average_cost", "last_price", "unrealized_pnl_pct", "allocation_pct")} for p in pf["positions"]]
+                    slim["options"] = [{k: o[k] for k in ("underlying", "strategy", "strike", "expiry", "contracts")} for o in pf["options"]]
+                    out[f"{kind}_account"] = slim
+                return ToolResult(name, args, True, json.loads(json.dumps(out, default=str)))
     except ProviderError as e:
         return ToolResult(name, args, False, f"unavailable: {e}")
     except Exception as e:  # never let a tool crash the conversation

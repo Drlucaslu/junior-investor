@@ -21,6 +21,9 @@ const TradePage = lazy(() => import("./pages/Trade"));
 const Watchlist = lazy(() => import("./pages/Watchlist"));
 const Journal = lazy(() => import("./pages/Journal"));
 const Learn = lazy(() => import("./pages/Learn"));
+const PathPage = lazy(() => import("./pages/Path"));
+const Scenarios = lazy(() => import("./pages/Scenarios"));
+const ScenarioPlay = lazy(() => import("./pages/ScenarioPlay"));
 const Parent = lazy(() => import("./pages/Parent"));
 const SettingsPage = lazy(() => import("./pages/Settings"));
 const NotFound = lazy(() => import("./pages/NotFound"));
@@ -79,6 +82,9 @@ export default function App() {
                 <Route path="/watchlist" element={<Watchlist />} />
                 <Route path="/journal" element={<Journal />} />
                 <Route path="/learn" element={<Learn />} />
+                <Route path="/path" element={<PathPage />} />
+                <Route path="/scenarios" element={<Scenarios />} />
+                <Route path="/scenarios/:scenarioId" element={<ScenarioPlay />} />
                 <Route path="/parent" element={<Parent />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="*" element={<NotFound />} />

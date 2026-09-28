@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { api } from "@/lib/api";
 import { toApiError, type ApiError } from "@/lib/errors";
 import { KEYS, local } from "@/lib/storage";
-import type { Language, Portfolio, Profile, SetupStatus } from "@/lib/types";
+import type { AccountKind, Language, LearningPath, Portfolio, Profile, SetupStatus } from "@/lib/types";
 import { currentLanguage, setLanguage, storedLanguage } from "@/i18n";
 
 interface AppState {
@@ -21,6 +21,10 @@ interface AppState {
   refreshPortfolio: () => Promise<void>;
   language: Language;
   changeLanguage: (lng: Language) => void;
+  account: AccountKind;
+  setAccount: (a: AccountKind) => void;
+  path: LearningPath | null;
+  refreshPath: () => Promise<LearningPath | null>;
 }
 
 const Ctx = createContext<AppState | null>(null);
@@ -35,6 +39,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [portfolioError, setPortfolioError] = useState<ApiError | null>(null);
   const [language, setLang] = useState<Language>(currentLanguage());
   const [bootKey, setBootKey] = useState(0);
+  const [account, setAccountState] = useState<AccountKind>("learning");
+  const [path, setPath] = useState<LearningPath | null>(null);
 
   const refreshSetup = useCallback(async () => {
     try {
@@ -87,7 +93,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
     local.set(KEYS.activeProfile, id);
     setActiveId(id);
     setPortfolio(null);
+    setPath(null);
   }, []);
+
+  // Remember the last account (learning / family) per learner.
+  useEffect(() => {
+    if (!activeId) return;
+    const stored = local.get(KEYS.account(activeId));
+    setAccountState(stored === "family" ? "family" : "learning");
+  }, [activeId]);
+
+  const setAccount = useCallback((a: AccountKind) => {
+    if (activeId) local.set(KEYS.account(activeId), a);
+    setPortfolio(null);
+    setAccountState(a);
+  }, [activeId]);
+
+  const refreshPath = useCallback(async () => {
+    if (!activeId) return null;
+    try {
+      const p = await api.path(activeId);
+      setPath(p);
+      return p;
+    } catch {
+      return null;
+    }
+  }, [activeId]);
 
   // When the learner changes, use their language.
   const lastLangProfile = useRef<string | null>(null);
@@ -106,17 +137,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const refreshPortfolio = useCallback(async () => {
     if (!activeId) return;
     try {
-      const pf = await api.portfolio(activeId);
+      const pf = await api.portfolio(activeId, account);
       setPortfolio(pf);
       setPortfolioError(null);
     } catch (e) {
       setPortfolioError(toApiError(e));
     }
-  }, [activeId]);
+  }, [activeId, account]);
 
   useEffect(() => {
     if (activeProfile) void refreshPortfolio();
   }, [activeProfile, refreshPortfolio]);
+
+  useEffect(() => {
+    if (activeProfile) void refreshPath();
+  }, [activeProfile, refreshPath]);
 
   const changeLanguage = useCallback((lng: Language) => {
     setLanguage(lng);
@@ -131,7 +166,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const value: AppState = {
     booting, bootError, retryBoot: () => setBootKey((k) => k + 1),
     setup, refreshSetup, profiles, refreshProfiles, activeProfile, selectProfile, updateActiveProfile,
-    portfolio, portfolioError, refreshPortfolio, language, changeLanguage,
+    portfolio, portfolioError, refreshPortfolio, language, changeLanguage, account, setAccount, path, refreshPath,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

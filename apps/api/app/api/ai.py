@@ -86,6 +86,9 @@ def _start_research(body: ResearchIn, db: Session):
                 if ev.get("structured"):
                     r.structured_json = ev["structured"]
             s.commit()
+            if r.status == "done":
+                from app.services import learning
+                learning.research_done(s, r)
 
     q = run_detached(run_research(body.query.strip(), body.mode, lang, p.age_group), persist)
     return report_id, q

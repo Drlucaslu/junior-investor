@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.models import ChildProfile
 from app.providers.types import CorporateAction, ProviderError
 from app.services import market_data
-from app.services.portfolio import current_account, ledger_entries, replay
+from app.services.portfolio import ledger_entries, replay
 from app.services.trading import _locks, add_ledger
 
 log = logging.getLogger(__name__)
@@ -36,14 +36,25 @@ def _ex_ts(d: str) -> datetime:
 
 def apply_corporate_actions(db: Session, profile: ChildProfile, force: bool = False,
                             actions_override: dict[str, list[CorporateAction]] | None = None) -> list[str]:
-    acct = current_account(db, profile.id)
+    """Apply splits/dividends to every account of the child."""
+    from app.models import SimulationAccount
+    from sqlalchemy import select
+
+    applied: list[str] = []
+    for acct in db.scalars(select(SimulationAccount).where(SimulationAccount.profile_id == profile.id)).all():
+        applied += _apply_for_account(db, profile, acct, force, actions_override)
+    return applied
+
+
+def _apply_for_account(db: Session, profile: ChildProfile, acct, force: bool,
+                       actions_override: dict[str, list[CorporateAction]] | None) -> list[str]:
     now = datetime.now(timezone.utc)
     last = acct.last_corporate_action_check
     if not force and last and (now - (last if last.tzinfo else last.replace(tzinfo=timezone.utc))) < CHECK_INTERVAL:
         return []
     applied: list[str] = []
-    with _locks[profile.id]:
-        entries = ledger_entries(db, profile.id, acct.epoch)
+    with _locks[acct.id]:
+        entries = ledger_entries(db, acct)
         symbols = sorted({e.symbol for e in entries if e.symbol and e.type in ("BUY", "SELL")})
         existing = {e.reference_id for e in entries if e.reference_id}
         for sym in symbols:
@@ -64,13 +75,13 @@ def apply_corporate_actions(db: Session, profile: ChildProfile, force: bool = Fa
                 ref = f"{'DIV' if a.type == 'DIVIDEND' else 'SPLIT'}:{sym}:{a.date}"
                 if ref in existing:
                     continue
-                st = replay([e for e in ledger_entries(db, profile.id, acct.epoch) if (e.timestamp if e.timestamp.tzinfo else e.timestamp.replace(tzinfo=timezone.utc)) < ex])
+                st = replay([e for e in ledger_entries(db, acct) if (e.timestamp if e.timestamp.tzinfo else e.timestamp.replace(tzinfo=timezone.utc)) < ex])
                 held = st.lots.get(sym).quantity if sym in st.lots else Decimal(0)
                 if held <= 0:
                     continue
                 try:
                     if a.type == "DIVIDEND":
-                        add_ledger(db, profile.id, acct.epoch, "DIVIDEND_CASH", held * Decimal(a.value), symbol=sym,
+                        add_ledger(db, profile.id, acct.epoch, "DIVIDEND_CASH", held * Decimal(a.value), account_id=acct.id, symbol=sym,
                                    quantity=None, price=Decimal(a.value), reference_id=ref, timestamp=ex,
                                    note=f"Cash dividend {a.value}/share on {held} shares ({a.source})")
                     else:
@@ -78,7 +89,7 @@ def apply_corporate_actions(db: Session, profile: ChildProfile, force: bool = Fa
                         if ratio <= 0:
                             continue
                         delta = held * ratio - held
-                        add_ledger(db, profile.id, acct.epoch, "SPLIT_ADJUSTMENT", Decimal(0), symbol=sym, quantity=delta,
+                        add_ledger(db, profile.id, acct.epoch, "SPLIT_ADJUSTMENT", Decimal(0), account_id=acct.id, symbol=sym, quantity=delta,
                                    reference_id=ref, timestamp=ex, note=f"Split ratio {ratio} ({a.source})")
                     db.flush()
                     existing.add(ref)

@@ -2,6 +2,10 @@
 
 Method: **Average Cost** (PRD §7.6). Fees are added to cost basis on buys and
 subtracted from proceeds on sells.
+
+v0.4: every ledger row belongs to one account (``learning`` or ``family``).
+Deposits (pocket money, parent deposits, level bonuses) are *contributions*, not
+profit. CDs and option positions are valued from their own tables.
 """
 from __future__ import annotations
 
@@ -13,7 +17,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import LedgerEntry, SimulationAccount
+from app.models import ChildProfile, LedgerEntry, SimulationAccount
 from app.providers.types import ProviderError
 
 ZERO = Decimal("0")
@@ -50,10 +54,19 @@ class LedgerState:
     realized_pnl: Decimal = ZERO
     dividends: Decimal = ZERO
     manual_adjustments: Decimal = ZERO
+    contributions: Decimal = ZERO  # pocket money, parent deposits, level bonuses
+    interest: Decimal = ZERO  # CD interest received
+    option_cash: Decimal = ZERO  # net premiums received (+) / paid (-)
 
 
-def ledger_entries(db: Session, profile_id: str, epoch: int, until: datetime | None = None) -> list[LedgerEntry]:
-    stmt = select(LedgerEntry).where(LedgerEntry.profile_id == profile_id, LedgerEntry.epoch == epoch)
+CONTRIBUTION_TYPES = ("ALLOWANCE", "PARENT_DEPOSIT", "LEVEL_BONUS")
+KINDS = ("learning", "family")
+
+
+def ledger_entries(db: Session, account: SimulationAccount, epoch: int | None = None,
+                   until: datetime | None = None) -> list[LedgerEntry]:
+    ep = account.epoch if epoch is None else epoch
+    stmt = select(LedgerEntry).where(LedgerEntry.account_id == account.id, LedgerEntry.epoch == ep)
     rows = list(db.scalars(stmt))
     if until is not None:
         rows = [r for r in rows if _aware(r.timestamp) < until]
@@ -105,29 +118,43 @@ def replay(entries: list[LedgerEntry]) -> LedgerState:
         elif e.type == "MANUAL_ADJUSTMENT":
             st.cash += amt
             st.manual_adjustments += amt
+        elif e.type in CONTRIBUTION_TYPES:
+            st.cash += amt
+            st.contributions += amt
+        elif e.type == "CD_OPEN":
+            st.cash += amt  # negative: cash moves into the CD
+        elif e.type == "CD_CLOSE":
+            st.cash += amt  # principal + interest (minus any early-withdrawal penalty)
+            st.interest += amt - Decimal(e.quantity or 0)  # quantity stores the principal returned
+        elif e.type in ("OPTION_OPEN", "OPTION_CLOSE"):
+            st.cash += amt
+            st.option_cash += amt
         # ACCOUNT_RESET rows live in the *old* epoch and carry no amount.
     return st
 
 
-def current_account(db: Session, profile_id: str) -> SimulationAccount:
-    acct = db.scalar(select(SimulationAccount).where(SimulationAccount.profile_id == profile_id))
+def current_account(db: Session, profile_id: str, kind: str = "family") -> SimulationAccount:
+    acct = db.scalar(select(SimulationAccount).where(SimulationAccount.profile_id == profile_id, SimulationAccount.kind == kind))
     if acct is None:
         raise LookupError("account not found")
     return acct
 
 
-def compute_portfolio(db: Session, profile_id: str, quote_fn) -> dict:
+def compute_portfolio(db: Session, profile_id: str, quote_fn, kind: str = "family") -> dict:
     """Return the full portfolio view. `quote_fn(symbol) -> Quote` supplies prices;
     if a price is unavailable the position is flagged instead of guessed."""
-    acct = current_account(db, profile_id)
-    entries = ledger_entries(db, profile_id, acct.epoch)
+    from app.services import products  # local import: products depends on this module
+
+    acct = current_account(db, profile_id, kind)
+    entries = ledger_entries(db, acct)
     st = replay(entries)
 
     # Start-of-day state (America/New_York calendar day) for Today P&L.
     ny_midnight = datetime.now(NY).replace(hour=0, minute=0, second=0, microsecond=0)
     sod = replay([e for e in entries if _aware(e.timestamp) < ny_midnight])
     sod_has_history = any(_aware(e.timestamp) < ny_midnight for e in entries)
-    flows_today = sum((Decimal(e.amount) for e in entries if _aware(e.timestamp) >= ny_midnight and e.type in ("MANUAL_ADJUSTMENT", "ACCOUNT_INITIALIZATION")), ZERO)
+    flow_types = ("MANUAL_ADJUSTMENT", "ACCOUNT_INITIALIZATION", *CONTRIBUTION_TYPES)
+    flows_today = sum((Decimal(e.amount) for e in entries if _aware(e.timestamp) >= ny_midnight and e.type in flow_types), ZERO)
 
     positions = []
     market_value = ZERO
@@ -176,18 +203,34 @@ def compute_portfolio(db: Session, profile_id: str, quote_fn) -> dict:
         base = Decimal(qt.previous_close) if (qt and qt.previous_close) else (Decimal(qt.price) if qt else lot.average_cost)
         sod_value += base * lot.quantity
 
-    equity = st.cash + market_value
+    cds = products.cd_holdings(db, acct)
+    cd_value = sum((Decimal(c["value"]) for c in cds), ZERO)
+    options = products.option_holdings(db, acct, quote_fn)
+    option_value = sum((Decimal(o["market_value"]) for o in options if o["market_value"] is not None), ZERO)
+    # CDs/options opened today have no start-of-day value; treat the change today at cost.
+    sod_value += products.sod_product_value(db, acct, ny_midnight)
+
+    equity = st.cash + market_value + cd_value + option_value
     for p in positions:
         p["allocation_pct"] = q2(p["market_value"] / equity * 100) if equity else ZERO
-    total_pnl = equity - st.starting_cash - st.manual_adjustments
+    total_pnl = equity - st.starting_cash - st.manual_adjustments - st.contributions
     if sod_has_history:
         today_pnl = equity - sod_value - flows_today
         today_base = sod_value
     else:  # account created today
         today_pnl = total_pnl
         today_base = st.starting_cash
+    invested = st.starting_cash + st.manual_adjustments + st.contributions
     return {
         "profile_id": profile_id,
+        "account_id": acct.id,
+        "account_kind": acct.kind,
+        "contributions": q2(st.contributions),
+        "cd_value": q2(cd_value),
+        "option_value": q2(option_value),
+        "cds": cds,
+        "options": options,
+        "interest": q2(st.interest),
         "base_currency": acct.base_currency,
         "starting_cash": q2(st.starting_cash),
         "cash": q2(st.cash),
@@ -197,7 +240,7 @@ def compute_portfolio(db: Session, profile_id: str, quote_fn) -> dict:
         "realized_pnl": q2(st.realized_pnl),
         "dividends": q2(st.dividends),
         "total_pnl": q2(total_pnl),
-        "total_return_pct": q2(total_pnl / st.starting_cash * 100) if st.starting_cash else ZERO,
+        "total_return_pct": q2(total_pnl / invested * 100) if invested else ZERO,
         "today_pnl": q2(today_pnl),
         "today_return_pct": q2(today_pnl / today_base * 100) if today_base else ZERO,
         "largest_position_pct": max((p["allocation_pct"] for p in positions), default=ZERO),

@@ -35,4 +35,5 @@ export const KEYS = {
   parentToken: "ji.parentToken",
   welcomed: (profileId: string) => `ji.welcomed.${profileId}`,
   promptIndex: "ji.promptIndex",
+  account: (profileId: string) => `ji.account.${profileId}`,
 } as const;

@@ -54,14 +54,26 @@ def conv(col, v):
     return v
 
 
-run_migrations()
+# The dump comes from v0.2: load it into the v0.2 schema, then run the real upgrade migration.
+from alembic import command  # noqa: E402
+from alembic.config import Config  # noqa: E402
+from sqlalchemy import MetaData  # noqa: E402
+
+cfg = Config(os.path.join(ROOT, "apps/api/alembic.ini"))
+cfg.set_main_option("script_location", os.path.join(ROOT, "apps/api/alembic"))
+cfg.set_main_option("sqlalchemy.url", f"sqlite:///{DB}")
+command.upgrade(cfg, "8696d11d7b96")
+old = MetaData()
+old.reflect(bind=engine)
 with engine.begin() as conn:
-    for t in Base.metadata.sorted_tables:
+    for t in old.sorted_tables:
         rows = dump["tables"].get(t.name)
         if not rows or t.name == "master_personas":
             continue
+        new_cols = Base.metadata.tables[t.name].columns
         for r in rows:
-            conn.execute(t.insert().values({c.name: conv(c, r.get(c.name)) for c in t.columns if c.name in r}))
+            conn.execute(t.insert().values({c.name: conv(new_cols[c.name], r.get(c.name)) for c in t.columns if c.name in r}))
+command.upgrade(cfg, "head")
 seed()
 from app.models import User  # noqa: E402
 from app.services.auth import hash_pin  # noqa: E402

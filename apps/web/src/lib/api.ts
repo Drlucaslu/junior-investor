@@ -2,6 +2,8 @@
 import { ApiError, errorFromResponse, toApiError } from "./errors";
 import { clearParentToken, getParentToken } from "./parentAuth";
 import type {
+  AccountKind, AccountsOverview, AllowanceSchedule, CDOffer, LeaderRow, LearningPath, OptionChain, OptionPreview, OptionRequest,
+  OptionStrategy, ScenarioRunSummary, ScenarioState, ScenarioSummary,
   AIConfig, AIConfigInput, AIPreset, AppSettings, ChatMessage, ChatSession, CompanyProfile, Financials, GlossaryEntry, History, HistoryRange, JournalCreate,
   JournalEntry, Language, LearningCard, LearningProgress, MarketStatus, Master, ParentChildOverview, ParentToken, Portfolio,
   Position, Profile, ProfileCreate, ProfilePatch, Quote, ResearchReport, ResearchSummary, ResetResult, SetupStatus,
@@ -80,9 +82,9 @@ export const api = {
   patchProfile: (id: string, body: ProfilePatch, parent = false) =>
     request<Profile>("PATCH", `/profiles/${enc(id)}`, { body, parent }),
   archiveProfile: (id: string) => request<{ ok: boolean }>("DELETE", `/profiles/${enc(id)}`, { parent: true }),
-  resetPortfolio: (id: string, starting_cash?: number | null) =>
+  resetPortfolio: (id: string, starting_cash?: number | null, account: AccountKind = "family") =>
     request<ResetResult>("POST", `/profiles/${enc(id)}/reset-portfolio`, {
-      body: starting_cash ? { starting_cash } : {}, parent: true,
+      body: starting_cash ? { starting_cash, account } : { account }, parent: true,
     }),
   exportHistory: (id: string) => request<Record<string, unknown>>("GET", `/profiles/${enc(id)}/export`, { parent: true }),
   parentOverview: () => request<{ profiles: ParentChildOverview[] }>("GET", "/parent/overview", { parent: true }),
@@ -98,10 +100,16 @@ export const api = {
   search: (q: string, signal?: AbortSignal) => request<SymbolMatch[]>("GET", `/market/search?q=${enc(q)}`, { signal }),
 
   // ---------------------------------------------------------------- portfolio & trading
-  portfolio: (pid: string) => request<Portfolio>("GET", `/profiles/${enc(pid)}/portfolio`),
-  positions: (pid: string) => request<Position[]>("GET", `/profiles/${enc(pid)}/positions`),
-  trades: (pid: string, symbol?: string) =>
-    request<Trade[]>("GET", `/profiles/${enc(pid)}/trades${symbol ? `?symbol=${enc(symbol)}` : ""}`),
+  portfolio: (pid: string, account: AccountKind = "family") => request<Portfolio>("GET", `/profiles/${enc(pid)}/portfolio?account=${account}`),
+  accounts: (pid: string) => request<AccountsOverview>("GET", `/profiles/${enc(pid)}/accounts`),
+  positions: (pid: string, account: AccountKind = "family") => request<Position[]>("GET", `/profiles/${enc(pid)}/positions?account=${account}`),
+  trades: (pid: string, symbol?: string, account?: AccountKind) => {
+    const q = new URLSearchParams();
+    if (symbol) q.set("symbol", symbol);
+    if (account) q.set("account", account);
+    const qs = q.toString();
+    return request<Trade[]>("GET", `/profiles/${enc(pid)}/trades${qs ? `?${qs}` : ""}`);
+  },
   previewTrade: (pid: string, body: TradeRequest) => request<TradePreview>("POST", `/profiles/${enc(pid)}/trades/preview`, { body }),
   executeTrade: (pid: string, body: TradeRequest) => request<Trade>("POST", `/profiles/${enc(pid)}/trades/execute`, { body }),
 
@@ -137,8 +145,35 @@ export const api = {
   cards: () => request<LearningCard[]>("GET", "/learn/cards"),
   glossary: () => request<GlossaryEntry[]>("GET", "/learn/glossary"),
   learnProgress: (pid: string) => request<LearningProgress[]>("GET", `/profiles/${enc(pid)}/learn/progress`),
-  completeCard: (pid: string, cardId: string) =>
-    request<{ ok: boolean }>("POST", `/profiles/${enc(pid)}/learn/${enc(cardId)}/complete`),
+  completeCard: (pid: string, cardId: string, answer?: number | null) =>
+    request<{ ok: boolean; correct: boolean; xp_awarded?: number; level?: number; level_up?: boolean }>(
+      "POST", `/profiles/${enc(pid)}/learn/${enc(cardId)}/complete`, { body: answer != null ? { answer } : {} }),
+
+  // ---------------------------------------------------------------- learning path (v0.4)
+  path: (pid: string) => request<LearningPath>("GET", `/profiles/${enc(pid)}/path`),
+  leaderboard: () => request<{ rows: LeaderRow[]; basis: string }>("GET", "/family/leaderboard"),
+  scenarios: (pid: string) => request<{ scenarios: ScenarioSummary[]; runs: ScenarioRunSummary[] }>("GET", `/profiles/${enc(pid)}/scenarios`),
+  startScenario: (pid: string, sid: string) => request<ScenarioState>("POST", `/profiles/${enc(pid)}/scenarios/${enc(sid)}/start`),
+  scenarioRun: (rid: string) => request<ScenarioState>("GET", `/scenario-runs/${enc(rid)}`),
+  decideScenario: (rid: string, allocations: Record<string, number>, reason: string) =>
+    request<ScenarioState>("POST", `/scenario-runs/${enc(rid)}/decide`, { body: { allocations, reason } }),
+  cdOffers: () => request<{ offers: CDOffer[]; rate_source: string }>("GET", "/cd/offers"),
+  openCd: (pid: string, account: AccountKind, amount: number, term_months: number) =>
+    request<{ id: string }>("POST", `/profiles/${enc(pid)}/cd`, { body: { account, amount, term_months } }),
+  withdrawCd: (pid: string, account: AccountKind, id: string) =>
+    request<{ id: string; status: string; payout: number }>("POST", `/profiles/${enc(pid)}/cd/${enc(id)}/withdraw?account=${account}`),
+  optionChain: (pid: string, account: AccountKind, symbol: string, strategy: OptionStrategy) =>
+    request<OptionChain>("GET", `/profiles/${enc(pid)}/options/chain/${enc(symbol)}?strategy=${strategy}&account=${account}`),
+  previewOption: (pid: string, body: OptionRequest) => request<OptionPreview>("POST", `/profiles/${enc(pid)}/options/preview`, { body }),
+  openOption: (pid: string, body: OptionRequest) => request<{ id: string }>("POST", `/profiles/${enc(pid)}/options/open`, { body }),
+  closeOption: (pid: string, account: AccountKind, id: string) =>
+    request<{ id: string; realized_pnl: number }>("POST", `/profiles/${enc(pid)}/options/${enc(id)}/close?account=${account}`),
+  allowance: (pid: string) => request<{ schedule: AllowanceSchedule | null }>("GET", `/profiles/${enc(pid)}/allowance`),
+  saveAllowance: (pid: string, body: { amount: number; frequency: "weekly" | "monthly"; weekday: number; day_of_month: number; enabled: boolean; note?: string | null; start_date?: string | null }) =>
+    request<{ schedule: AllowanceSchedule }>("PUT", `/profiles/${enc(pid)}/allowance`, { body, parent: true }),
+  deleteAllowance: (pid: string) => request<{ ok: boolean }>("DELETE", `/profiles/${enc(pid)}/allowance`, { parent: true }),
+  parentDeposit: (pid: string, amount: number, note?: string) =>
+    request<{ ok: boolean }>("POST", `/profiles/${enc(pid)}/deposit`, { body: { amount, note }, parent: true }),
 };
 
 // Glossary is static — fetch once and cache for the session.

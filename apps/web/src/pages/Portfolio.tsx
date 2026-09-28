@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Briefcase, Scale, Search } from "lucide-react";
+import { AlertTriangle, Briefcase, CalendarClock, Layers, PiggyBank, Scale, Search } from "lucide-react";
 import { api } from "@/lib/api";
 import { fmtDate, fmtMoney, fmtPct, fmtQty } from "@/lib/format";
 import type { Position } from "@/lib/types";
@@ -16,38 +16,116 @@ import { PortfolioSummary } from "@/components/PortfolioSummary";
 import { Change } from "@/components/Change";
 import { Term } from "@/components/Term";
 import { AllocationDonut, SERIES, type Slice } from "@/components/charts";
+import { AccountSwitcher } from "@/components/AccountSwitcher";
+import { CDDialog } from "@/components/CDDialog";
+import { OptionsDialog } from "@/components/OptionsDialog";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
+import { errorText } from "@/lib/errorText";
 import { cn } from "@/lib/utils";
 
 export default function Portfolio() {
   const { t } = useTranslation();
   const profile = useProfile();
   const navigate = useNavigate();
-  const { portfolio, portfolioError, refreshPortfolio } = useApp();
+  const { portfolio: ctxPortfolio, portfolioError, refreshPortfolio, account, path } = useApp();
+  const toast = useToast();
   const [tab, setTab] = useState<"positions" | "history">("positions");
+  const [cdOpen, setCdOpen] = useState(false);
+  const [optOpen, setOptOpen] = useState(false);
   useDocumentTitle(t("portfolio.title"));
-  const trades = useAsync(() => api.trades(profile.id), [profile.id], { enabled: tab === "history" });
+  const trades = useAsync(() => api.trades(profile.id, undefined, account), [profile.id, account], { enabled: tab === "history" });
+  const accounts = useAsync(() => api.accounts(profile.id), [profile.id, account]);
+  const allowed = path?.allowed[account] ?? [];
+  const pf = ctxPortfolio && ctxPortfolio.account_kind === account ? ctxPortfolio : null;
+
+  const withdrawCd = async (id: string, value: number) => {
+    if (!window.confirm(t("cd.withdrawConfirm", { amount: fmtMoney(value) }))) return;
+    try {
+      await api.withdrawCd(profile.id, account, id);
+      toast.push("success", t("cd.withdrawn"));
+      void refreshPortfolio();
+    } catch (e) { toast.push("error", errorText(t, e)); }
+  };
+  const closeOption = async (id: string) => {
+    if (!window.confirm(t("options.closeConfirm"))) return;
+    try {
+      await api.closeOption(profile.id, account, id);
+      toast.push("success", t("options.closed"));
+      void refreshPortfolio();
+    } catch (e) { toast.push("error", errorText(t, e)); }
+  };
 
   useEffect(() => { void refreshPortfolio(); }, [refreshPortfolio]);
 
-  const positions = useMemo(() => [...(portfolio?.positions ?? [])].sort((a, b) => b.market_value - a.market_value), [portfolio]);
+  const positions = useMemo(() => [...(pf?.positions ?? [])].sort((a, b) => b.market_value - a.market_value), [pf]);
   const slices: Slice[] = useMemo(() => {
+    const portfolio = pf;
     if (!portfolio) return [];
     const top = positions.slice(0, 7).map((p, i) => ({ name: p.ticker, value: p.market_value, colorVar: SERIES[i] }));
     const rest = positions.slice(7).reduce((s, p) => s + p.market_value, 0);
     const out: Slice[] = [...top];
     if (rest > 0) out.push({ name: t("portfolio.other"), value: rest, colorVar: "--series-8" });
+    if (portfolio.cd_value > 0) out.push({ name: t("accounts.cdValue"), value: portfolio.cd_value, colorVar: "--series-7" });
     if (portfolio.cash > 0) out.push({ name: t("portfolio.cash"), value: portfolio.cash, colorVar: "--series-other" });
     return out;
-  }, [portfolio, positions, t]);
+  }, [pf, positions, t]);
 
+  const portfolio = pf;
   const largest = positions[0];
   const concentrated = largest && largest.allocation_pct > 30;
 
   return (
     <div className="space-y-6">
-      <PageHeader title={t("portfolio.title")} subtitle={t("portfolio.subtitle")} />
-      {portfolioError && !portfolio ? <Card><ErrorState error={portfolioError} onRetry={() => void refreshPortfolio()} /></Card> : (
-        <PortfolioSummary portfolio={portfolio} loading />
+      <PageHeader title={t("portfolio.title")} subtitle={t("portfolio.subtitle")}
+        actions={<div className="flex flex-wrap gap-2">
+          {allowed.includes("cd") && <Button variant="outline" onClick={() => setCdOpen(true)} disabled={!pf}><PiggyBank /> {t("cd.open")}</Button>}
+          {allowed.includes("options") && <Button variant="outline" onClick={() => setOptOpen(true)} disabled={!pf}><Layers /> {t("options.open")}</Button>}
+        </div>} />
+      <AccountSwitcher />
+      {account === "family" && accounts.data?.allowance?.enabled && accounts.data.allowance.next_date && (
+        <Alert variant="info" icon={<CalendarClock className="size-4 text-primary" aria-hidden />}>
+          {t("accounts.nextAllowance", { amount: fmtMoney(accounts.data.allowance.amount), date: fmtDate(accounts.data.allowance.next_date) })}
+        </Alert>
+      )}
+      {portfolioError && !pf ? <Card><ErrorState error={portfolioError} onRetry={() => void refreshPortfolio()} /></Card> : (
+        <PortfolioSummary portfolio={pf} loading />
+      )}
+      {pf && pf.cds.length > 0 && (
+        <Card>
+          <CardHeader><CardTitle className="flex items-center gap-2"><PiggyBank className="size-4 text-primary" aria-hidden />{t("cd.list")}</CardTitle></CardHeader>
+          <CardContent>
+            <ul className="divide-y">
+              {pf.cds.map((c) => (
+                <li key={c.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2.5 text-sm">
+                  <span className="font-medium">{t("cd.months", { n: c.term_months })} · {fmtPct(c.apy * 100, { decimals: 2 })} APY</span>
+                  <span className="text-muted-foreground">{t("cd.principal")} {fmtMoney(c.principal)}</span>
+                  <span className="tabular">{t("cd.value")} <b>{fmtMoney(c.value)}</b></span>
+                  <span className="text-xs text-muted-foreground">{t("cd.matures")} {fmtDate(c.matures_at)} → {fmtMoney(c.value_at_maturity)}</span>
+                  <Button size="sm" variant="ghost" className="ml-auto" onClick={() => void withdrawCd(c.id, c.early_withdrawal_value)}>{t("cd.withdraw")}</Button>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+      {pf && pf.options.length > 0 && (
+        <Card>
+          <CardHeader><CardTitle className="flex items-center gap-2"><Layers className="size-4 text-primary" aria-hidden />{t("options.list")}</CardTitle></CardHeader>
+          <CardContent>
+            <ul className="divide-y">
+              {pf.options.map((o) => (
+                <li key={o.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2.5 text-sm">
+                  <Badge variant={o.right === "CALL" ? "accent" : "default"}>{t(`options.${o.strategy}`)}</Badge>
+                  <span className="font-medium">{o.underlying} {fmtMoney(o.strike)} × {o.contracts}</span>
+                  <span className="text-xs text-muted-foreground">{t("options.expires")} {o.expiry} ({t("options.days", { n: o.days_to_expiry })})</span>
+                  <span className="text-xs">{t("options.unrealized")}: {o.unrealized_pnl != null ? <Change value={o.unrealized_pnl} size="xs" /> : "—"}</span>
+                  <Button size="sm" variant="ghost" className="ml-auto" onClick={() => void closeOption(o.id)}>{t("options.close")}</Button>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
       )}
 
       {concentrated && (
@@ -187,6 +265,8 @@ export default function Portfolio() {
         </Card>
       )}
       <p className="text-center text-xs text-muted-foreground">{t("disclaimer.app")}</p>
+      {pf && <CDDialog open={cdOpen} onClose={() => setCdOpen(false)} account={account} cash={pf.cash} onDone={() => void refreshPortfolio()} />}
+      {pf && <OptionsDialog open={optOpen} onClose={() => setOptOpen(false)} account={account} positions={pf.positions} onDone={() => void refreshPortfolio()} />}
     </div>
   );
 }

@@ -8,18 +8,24 @@ import shutil
 import sys
 import textwrap
 
-VERSION = "0.3.0"        # chart version (Olares Market)
-IMAGE_TAG = "0.2.2"      # container image tag (unchanged app code)
+VERSION = "0.4.0"        # chart version (Olares Market)
+IMAGE_TAG = "0.4.0"      # container image tag (unchanged app code)
 API_VERSION = "v3"       # OlaresManifest apiVersion: v3 = Olares 1.12.6+
 OLARES_RANGE = ">=1.12.6-0"
 GH_USER = "Drlucaslu"
 REPO = f"https://github.com/{GH_USER}/junior-investor"
 RAW = f"https://raw.githubusercontent.com/{GH_USER}/junior-investor/main/deploy/market/assets"
 IMAGE = f"ghcr.io/{GH_USER.lower()}/junior-investor:{IMAGE_TAG}"
-SCREENS = [f"{RAW}/screenshot-{i}.webp" for i in range(1, 7)]
+SCREENS = [f"{RAW}/screenshot-{i}.webp" for i in range(1, 9)]
 
 FULL_EN = """\
 Junior Investor is a calm, private place for kids and teens (ages 10–18) to learn how good investors think — with virtual money only.
+
+**Learn first, then unlock**
+
+- **Learning path** – five levels: Saver → Lender → Index Investor → Stock Picker → Options Apprentice. Each level unlocks a new kind of investment (cash and CDs, bond funds, index funds, individual stocks, then beginner options on shares you own) and adds virtual cash to the learning account. Levels are earned with short lessons (with a quick check question) and historical scenarios.
+- **Time machine** – travel back to real market history (the 2000 dot-com bubble, the 2007 smartphone revolution, the 2008 financial crisis, the 2020 pandemic, the 2022 rate shock) with company names hidden. Split $10,000, explain why, jump forward in time, then see what really happened.
+- **Two accounts** – a gamified learning account on a family leaderboard ranked by learning points (never by returns), and a private family account that parents fund with starting cash and scheduled pocket money.
 
 **Three things to do, one learning loop**
 
@@ -40,6 +46,12 @@ Not investment advice. Market data may be delayed.
 FULL_ZH = """\
 少年投资家是一个安静、私密的地方，帮助 10–18 岁的孩子用虚拟资金学习优秀投资者是如何思考的。
 
+**先学习，再解锁**
+
+- **学习路线**：五个等级——储蓄者 → 债权人 → 指数投资者 → 选股者 → 期权学徒。每升一级解锁一种新的投资品种（现金与定期存单、债券基金、指数基金、个股，最后是针对已持有股票的入门期权），并为学习账户增加虚拟资金。升级靠短课程（附小测验）和历史情景。
+- **历史时光机**：穿越回真实的市场历史（2000 年互联网泡沫、2007 年智能手机革命、2008 年金融危机、2020 年疫情、2022 年利率飙升），公司名称隐藏。分配 1 万美元、写下理由、跳到未来，再看看真实发生了什么。
+- **两个账户**：游戏化的学习账户参加家庭排行榜（按学习积分排名，从不按收益）；私人家庭账户由父母注资，可设置定期零花钱。
+
 **三件事，一个学习闭环**
 
 - **请教大师**：与基于巴菲特、彼得·林奇、格雷厄姆、芒格公开投资思想构建的 AI 教学角色对话。回答会按孩子的年龄调整难度；涉及股价、营收、估值等当前事实时，一定先用工具查询，绝不凭空猜测。
@@ -56,8 +68,8 @@ FULL_ZH = """\
 不构成投资建议，行情数据可能有延迟。
 """
 
-UPGRADE_EN = "New v3 app format for Olares 1.12.6 and later. Parents can choose the AI model in Settings: the Olares local model or any OpenAI-compatible cloud model. More robust streaming on mobile networks and while a local model is loading."
-UPGRADE_ZH = "采用 Olares 1.12.6 及以上版本的 v3 应用格式。家长可以在“设置”中选择 AI 模型：Olares 本机模型，或任何 OpenAI 兼容的云端模型。移动网络和本地模型加载期间的流式回答更稳定。"
+UPGRADE_EN = "New learning path: five levels that unlock cash & CDs, bond funds, index funds, stocks and beginner options as children learn. Historical time-machine scenarios with hidden company names, lessons with quick checks, learning points, badges and a family leaderboard ranked by learning (not returns). Each child now has a learning account and a private family account with optional scheduled pocket money. Existing portfolios become the family account."
+UPGRADE_ZH = "全新学习路线：五个等级，随学习逐步解锁现金与定期存单、债券基金、指数基金、个股和入门期权。新增隐藏公司名称的历史时光机情景、带小测验的课程、学习积分、徽章，以及按学习积分（而非收益）排名的家庭排行榜。每个孩子现在有学习账户和私人家庭账户，家庭账户可设置定期零花钱。原有投资组合自动成为家庭账户。"
 
 
 def q(s: str) -> str:
@@ -175,7 +187,7 @@ metadata:
   labels:
     app: juniorinvestor
 spec:
-  replicas: {{ .Values.workloads.juniorinvestor.replicaCount | default 1 }}
+  replicas: {{ .Values.workloads.juniorinvestor.replicaCount }}
   strategy:
     type: Recreate
   selector:

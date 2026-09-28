@@ -28,7 +28,10 @@ export function PortfolioSummary({ portfolio, loading }: { portfolio: Portfolio 
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
       <Stat label={t("snapshot.totalValue")} big className="col-span-2 bg-primary-soft/50">{fmtMoney(portfolio.total_equity)}</Stat>
       <Stat label={t("snapshot.cash")}>{fmtMoney(portfolio.cash, { decimals: 0 })}</Stat>
-      <Stat label={t("snapshot.invested")}>{fmtMoney(portfolio.market_value, { decimals: 0 })}</Stat>
+      <Stat label={t("snapshot.invested")}>
+        {fmtMoney(portfolio.market_value, { decimals: 0 })}
+        {portfolio.cd_value > 0 && <span className="block text-xs font-medium text-muted-foreground">+ {t("accounts.cdValue")} {fmtMoney(portfolio.cd_value, { decimals: 0 })}</span>}
+      </Stat>
       <Stat label={<span title={t("snapshot.pnlFull")}>{t("snapshot.todayPnl")}</span>}>
         <Change value={portfolio.today_pnl} size="md" />
       </Stat>
@@ -37,6 +40,11 @@ export function PortfolioSummary({ portfolio, loading }: { portfolio: Portfolio 
         <span className={cn("block text-xs font-medium", signOf(ret) === "up" ? "text-gain" : signOf(ret) === "down" ? "text-loss" : "text-muted-foreground")}>
           {t("snapshot.totalReturn")} {fmtPct(ret, { sign: true })}
         </span>
+        {portfolio.contributions > 0 && (
+          <span className="block text-[0.7rem] font-normal text-muted-foreground" title={t("accounts.contributionsHint")}>
+            {t("accounts.contributions")} {fmtMoney(portfolio.contributions, { decimals: 0 })}
+          </span>
+        )}
       </Stat>
     </div>
   );

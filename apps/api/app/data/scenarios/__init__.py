@@ -1,0 +1,291 @@
+"""Historical "time machine" scenarios (历史时光机).
+
+Prices: monthly closes adjusted for splits and dividends (Yahoo Finance), bundled
+in prices.json so scenarios work offline and give the same result every time.
+Company names are hidden until the end so children judge the business, not the
+brand. Pets.com was delisted in 2000 and is not on Yahoo; its prices are an
+approximation reconstructed from widely reported milestones (IPO at $11 in
+February 2000, liquidation announced in November 2000) and are labelled as such.
+"""
+from __future__ import annotations
+
+import json
+from functools import lru_cache
+from pathlib import Path
+
+_HERE = Path(__file__).resolve().parent
+
+PETS_APPROX = {"2000-02": 11.0, "2000-03": 7.5, "2000-04": 3.5, "2000-05": 2.4, "2000-06": 2.1, "2000-07": 1.4, "2000-08": 1.2,
+               "2000-09": 0.9, "2000-10": 0.5, "2000-11": 0.2}
+
+
+@lru_cache
+def prices() -> dict[str, dict[str, float]]:
+    data = json.loads((_HERE / "prices.json").read_text())
+    pets = dict(PETS_APPROX)
+    # After liquidation the shares were delisted; treat them as worth nothing.
+    y, m = 2000, 12
+    while (y, m) <= (2025, 1):
+        pets[f"{y:04d}-{m:02d}"] = 0.0
+        m += 1
+        if m > 12:
+            y, m = y + 1, 1
+    data["PETS"] = pets
+    return data
+
+
+def C(key: str, ticker: str, name: str, desc_en: str, desc_zh: str, facts_en: list[str], facts_zh: list[str],
+      story_en: str, story_zh: str, approx: bool = False) -> dict:
+    return {"key": key, "ticker": ticker, "name": name, "desc_en": desc_en, "desc_zh": desc_zh, "facts_en": facts_en,
+            "facts_zh": facts_zh, "story_en": story_en, "story_zh": story_zh, "approx": approx}
+
+
+SCENARIOS: list[dict] = [
+    {
+        "id": "rate_shock_2022", "year": 2022, "difficulty": 1, "benchmark": "SPY", "unlocks_for": 3,
+        "dates": ["2021-12", "2022-06", "2022-12", "2024-12"],
+        "title_en": "When Interest Rates Jumped (2022)", "title_zh": "利率飙升的一年（2022）",
+        "tagline_en": "Are bonds always safe?", "tagline_zh": "债券一定安全吗？",
+        "intro_en": "It is December 2021. Prices of everyday things are rising fast — inflation is about 7%, the highest in almost 40 years. The US central bank (the Federal Reserve, \"the Fed\") has kept interest rates near zero but says it may start raising them. You have $10,000 to split between four funds and cash. Cash earns no interest in this simulation.",
+        "intro_zh": "现在是 2021 年 12 月。日常用品价格涨得很快——通货膨胀约 7%，接近 40 年来最高。美国央行（美联储, Federal Reserve）一直把利率维持在接近零的水平，但表示可能开始加息。你有 1 万美元，可以分配到四只基金和现金上。本模拟中现金没有利息。",
+        "companies": [
+            C("A", "SHY", "iShares 1-3 Year Treasury Bond ETF (SHY)",
+              "A fund of short-term US government bonds that mature in 1–3 years.", "一只短期美国国债基金，债券在 1–3 年内到期。",
+              ["Very stable price", "Pays under 1% interest right now", "Backed by the US government"],
+              ["价格非常稳定", "目前利息不到 1%", "由美国政府担保"],
+              "Short-term bonds barely moved: they fell about 4% in 2022 and recovered as higher interest payments came in.",
+              "短期国债几乎没怎么动：2022 年下跌约 4%，随后靠更高的利息收入恢复。"),
+            C("B", "TLT", "iShares 20+ Year Treasury Bond ETF (TLT)",
+              "A fund of long-term US government bonds that mature in 20+ years.", "一只长期美国国债基金，债券 20 年以上才到期。",
+              ["Almost no risk of the government not paying", "Pays about 2% interest", "Many people see it as a safe place"],
+              ["政府违约的风险几乎为零", "利息约 2%", "很多人把它当作“避风港”"],
+              "When rates jumped, long bonds crashed — down about 31% in 2022, one of the worst years for bonds in history. Safe from default is not the same as safe from price drops.",
+              "利率飙升时长期国债暴跌——2022 年下跌约 31%，是债券史上最差的年份之一。“不会违约”不等于“价格不会跌”。"),
+            C("C", "QQQ", "Invesco QQQ Trust (Nasdaq-100)",
+              "A fund of 100 large companies, mostly technology.", "一只持有 100 家大公司（以科技公司为主）的基金。",
+              ["Rose about 48% in 2020 and 27% in 2021", "Holds the biggest tech names", "Many investors expect it to keep rising"],
+              ["2020 年上涨约 48%，2021 年上涨约 27%", "持有最大的科技公司", "很多投资者预期会继续上涨"],
+              "Tech stocks fell about a third in 2022 as higher rates made future profits worth less today — then roared back in 2023–24 on excitement about AI.",
+              "2022 年加息让“未来利润”在今天变得不那么值钱，科技股下跌约三分之一——随后在 2023–24 年因 AI 热潮大幅反弹。"),
+            C("D", "XOM", "Exxon Mobil (XOM)",
+              "A giant oil and gas company.", "一家巨型石油天然气公司。",
+              ["Lost money in 2020 when oil prices collapsed", "Stock still below its 2014 level", "Many investors think oil is a dying business"],
+              ["2020 年油价暴跌时亏损", "股价仍低于 2014 年水平", "很多投资者认为石油是“夕阳产业”"],
+              "Energy prices soared after the war in Ukraine began. The company earned record profits in 2022 and its stock nearly doubled.",
+              "乌克兰战争爆发后能源价格飙升。这家公司 2022 年创下利润纪录，股价几乎翻倍。"),
+        ],
+        "events": {
+            "2022-06": {"en": "The Fed raised interest rates quickly — in June by the most in a single step since 1994. Russia invaded Ukraine in February and oil and gas prices shot up. Stocks AND bonds fell at the same time, which is unusual.",
+                        "zh": "美联储快速加息——6 月单次加息幅度为 1994 年以来最大。2 月俄罗斯入侵乌克兰，石油和天然气价格飙升。股票和债券同时下跌，这很少见。"},
+            "2022-12": {"en": "Interest rates reached over 4% by year-end. 2022 was one of the worst years ever for bond funds. Energy companies reported record profits.",
+                        "zh": "到年底利率升到 4% 以上。2022 年是债券基金有史以来最差的年份之一。能源公司利润创纪录。"},
+            "2024-12": {"en": "Inflation cooled to around 3% and the Fed began cutting rates in late 2024. Excitement about artificial intelligence (AI) lifted big technology companies.",
+                        "zh": "通胀降到 3% 左右，美联储在 2024 年下半年开始降息。人工智能（AI）热潮推动大型科技公司上涨。"},
+        },
+        "lessons_en": ["Bonds are safer than stocks, but not risk-free: when interest rates rise, bond prices fall — long-term bonds the most.",
+                       "Inflation changes which assets do well. Energy companies benefited; cash lost buying power.",
+                       "Owning different kinds of assets (diversification) softens surprises nobody predicted."],
+        "lessons_zh": ["债券比股票安全，但并非没有风险：利率上升时债券价格下跌，长期债券跌得最多。",
+                       "通货膨胀会改变哪些资产表现好：能源公司受益，现金的购买力下降。",
+                       "持有不同种类的资产（分散投资）可以缓冲没人能预料的意外。"],
+        "questions_en": ["Why did long-term bonds fall so much more than short-term bonds?", "Did you change your plan after the first bad news? Was that a good idea?"],
+        "questions_zh": ["为什么长期债券比短期债券跌得多得多？", "第一次坏消息之后你改变计划了吗？这样做好吗？"],
+    },
+    {
+        "id": "dotcom_2000", "year": 2000, "difficulty": 2, "benchmark": "SPY", "unlocks_for": 4,
+        "dates": ["2000-03", "2001-03", "2005-03", "2010-03"],
+        "title_en": "The Internet Gold Rush (2000)", "title_zh": "互联网淘金热（2000）",
+        "tagline_en": "A great company is not always a great investment.", "tagline_zh": "好公司不一定是好投资。",
+        "intro_en": "It is March 2000. The internet is changing everything and technology stocks have soared — the Nasdaq index has more than doubled in a year. Everyone is talking about \"dot-com\" companies. You have $10,000 to split between four companies and cash. What would you do?",
+        "intro_zh": "现在是 2000 年 3 月。互联网正在改变一切，科技股一路飙升——纳斯达克指数一年内翻了一倍多。人人都在谈论“.com”公司。你有 1 万美元，可以分配到四家公司和现金上。你会怎么做？",
+        "companies": [
+            C("A", "CSCO", "Cisco Systems (CSCO)",
+              "Makes the networking equipment (routers and switches) the internet runs on.", "生产互联网赖以运行的网络设备（路由器和交换机）。",
+              ["Sales grew over 40% last year", "Very profitable", "One of the most valuable companies in the world", "Stock price is well over 100 times its yearly profit (P/E above 100)"],
+              ["去年销售增长超过 40%", "非常赚钱", "全球市值最高的公司之一", "股价超过年利润的 100 倍（市盈率 P/E 超过 100）"],
+              "Cisco kept making money and is still a big company today — but its stock fell about 80% and, even including dividends, had not recovered its 2000 price 10 years later. The business was great; the price was far too high.",
+              "思科一直在赚钱，至今仍是一家大公司——但它的股价下跌约 80%，即便算上分红，10 年后仍未回到 2000 年的价格。生意很好，但价格太贵了。"),
+            C("B", "AMZN", "Amazon.com (AMZN)",
+              "An online store that started with books and now also sells music, toys and electronics.", "一家网上商店，从卖书起家，现在也卖音乐、玩具和电子产品。",
+              ["Sales more than doubled last year", "Loses a lot of money every year", "Has borrowed billions of dollars", "Critics call it \"Amazon.bomb\""],
+              ["去年销售翻了一倍多", "每年都亏很多钱", "借了数十亿美元", "批评者叫它“Amazon.bomb”（亚马逊炸弹）"],
+              "Amazon's stock fell about 90% by 2001 and many people gave up on it. It made its first full-year profit in 2003, kept growing, and became one of the most valuable companies in the world.",
+              "亚马逊股价到 2001 年下跌约 90%，很多人放弃了它。它在 2003 年实现首个全年盈利，持续增长，最终成为全球市值最高的公司之一。"),
+            C("C", "PETS", "Pets.com",
+              "A brand-new online pet-supply store that listed on the stock market last month.", "一家刚在上个月上市的网上宠物用品商店。",
+              ["Famous TV ads with a sock-puppet mascot", "Sells many products for less than they cost to ship", "Sales are tiny compared with its spending"],
+              ["靠一个袜子玩偶吉祥物的电视广告出名", "很多商品的售价低于运费成本", "销售额与支出相比微不足道"],
+              "Pets.com ran out of money and shut down in November 2000, only nine months after listing. Shareholders lost almost everything. (Prices for this company are approximate: it was delisted long ago.)",
+              "Pets.com 在 2000 年 11 月资金耗尽倒闭，距离上市仅九个月。股东几乎血本无归。（这家公司的价格为近似值：它早已退市。）", approx=True),
+            C("D", "KO", "The Coca-Cola Company (KO)",
+              "A 100-year-old soft-drink company sold in about 200 countries.", "一家有 100 多年历史的饮料公司，产品在约 200 个国家销售。",
+              ["Slow growth", "Stock has fallen from its 1998 high", "Pays a dividend every year", "Many investors call it \"old economy\" and boring"],
+              ["增长缓慢", "股价低于 1998 年的高点", "每年都分红", "很多投资者说它是“旧经济”、很无聊"],
+              "The \"boring\" company barely moved during the crash and, with dividends, ended the decade far ahead of Company A and the tech-heavy Nasdaq.",
+              "这家“无聊”的公司在崩盘中几乎没怎么跌，算上分红，十年后远远跑赢了 A 公司和以科技股为主的纳斯达克指数。"),
+        ],
+        "events": {
+            "2001-03": {"en": "The dot-com bubble burst. The Nasdaq index has fallen more than 60% from its peak. Hundreds of internet companies ran out of money. Company C announced in November 2000 that it was closing down.",
+                        "zh": "互联网泡沫破裂。纳斯达克指数从高点下跌超过 60%。数百家互联网公司资金耗尽。C 公司在 2000 年 11 月宣布关闭。"},
+            "2005-03": {"en": "The economy recovered from a recession in 2001. Online shopping is growing steadily. Company B made its first full-year profit in 2003. Company A is still profitable but grows much more slowly than before.",
+                        "zh": "经济从 2001 年的衰退中恢复。网购稳步增长。B 公司在 2003 年实现首个全年盈利。A 公司仍然赚钱，但增速比以前慢得多。"},
+            "2010-03": {"en": "The world went through the 2008 financial crisis and is recovering. Company B now sells almost everything online and has started a cloud-computing business.",
+                        "zh": "世界经历了 2008 年金融危机，正在复苏。B 公司几乎什么都在网上卖，还开始了云计算业务。"},
+        },
+        "lessons_en": ["A great business bought at a crazy price can be a bad investment for a decade (Company A).",
+                       "Fast growth with big losses can become a giant — or go to zero. Most dot-coms went to zero (Company C).",
+                       "\"Boring\" companies with steady profits and dividends often win when excitement fades (Company D).",
+                       "Nobody knew in 2000 which company would be the winner. Spreading your money out protects you from being badly wrong."],
+        "lessons_zh": ["好生意如果买在疯狂的价格，也可能十年都是坏投资（A 公司）。",
+                       "高速增长加巨额亏损，可能变成巨头，也可能归零。大多数 .com 公司都归零了（C 公司）。",
+                       "利润稳定、持续分红的“无聊”公司，往往在热潮退去时胜出（D 公司）。",
+                       "2000 年没有人知道谁会是赢家。分散投资能避免你错得太离谱。"],
+        "questions_en": ["What made Company A risky even though it was very profitable?", "Would you have held Company B after it fell 90%? What would you need to believe?"],
+        "questions_zh": ["A 公司很赚钱，为什么仍然有风险？", "B 公司跌了 90% 之后你还会持有吗？你需要相信什么？"],
+    },
+    {
+        "id": "crisis_2008", "year": 2008, "difficulty": 2, "benchmark": "SPY", "unlocks_for": 5,
+        "dates": ["2007-10", "2009-02", "2012-10", "2017-10"],
+        "title_en": "The 2008 Financial Crisis", "title_zh": "2008 金融危机",
+        "tagline_en": "What borrowed money does in a crash.", "tagline_zh": "借来的钱在崩盘时会发生什么。",
+        "intro_en": "It is October 2007. The US stock market just reached an all-time high. House prices have risen for years, and banks lent money to many people who could barely afford their homes. A few of those loans are starting to go bad, but most experts say the problem is small. You have $10,000 to split between three companies and cash.",
+        "intro_zh": "现在是 2007 年 10 月。美国股市刚创下历史新高。房价涨了很多年，银行把钱借给了许多勉强买得起房的人。其中一些贷款开始出问题，但大多数专家说问题不大。你有 1 万美元，可以分配到三家公司和现金上。",
+        "companies": [
+            C("A", "C", "Citigroup (C)",
+              "One of the largest banks in the world.", "全球最大的银行之一。",
+              ["Very profitable in recent years", "Earns a lot from home loans (mortgages) and trading", "Pays a big dividend (about 4–5% a year)", "Uses a lot of borrowed money (high leverage)"],
+              ["近几年非常赚钱", "大量收入来自住房贷款（按揭）和交易", "分红很高（每年约 4–5%）", "使用大量借来的钱（高杠杆）"],
+              "Citigroup lost tens of billions on bad mortgage investments and needed a government rescue. Its stock fell over 95%, it cut its dividend to almost nothing and did a 1-for-10 reverse split. Ten years later it was still far below 2007.",
+              "花旗集团在糟糕的按揭投资上亏损数百亿美元，需要政府救助。股价下跌超过 95%，分红几乎砍光，还进行了 10 股合 1 的反向拆股。十年后股价仍远低于 2007 年。"),
+            C("B", "WMT", "Walmart (WMT)",
+              "The world's largest retailer, known for low prices.", "全球最大的零售商，以低价著称。",
+              ["Grows slowly but steadily", "Its stock has moved sideways for years", "People shop there in good times and bad"],
+              ["增长慢但稳定", "股价好几年都横盘", "无论经济好坏，人们都会去购物"],
+              "When money got tight, more people shopped for low prices. Walmart's stock rose even during the crisis.",
+              "钱紧的时候，更多人去买便宜货。沃尔玛的股价在危机期间甚至上涨了。"),
+            C("C", "MCD", "McDonald's (MCD)",
+              "A fast-food chain with restaurants in more than 100 countries.", "一家在 100 多个国家开店的快餐连锁。",
+              ["Recently improved its menu", "Sales are growing again", "Pays a rising dividend"],
+              ["最近改进了菜单", "销售重新增长", "分红逐年提高"],
+              "Affordable meals stayed popular. The stock dipped a little, then kept climbing — nearly 4x including dividends by 2017.",
+              "平价餐食依然受欢迎。股价小幅下跌后持续上涨——算上分红，到 2017 年接近翻了 4 倍。"),
+        ],
+        "events": {
+            "2009-02": {"en": "A full-blown financial crisis. Lehman Brothers, a big investment bank, went bankrupt in September 2008. Company A needed a government rescue (a bailout). The US stock market has fallen about 50% from its peak. Investors who borrowed money to invest (leverage) got margin calls and were forced to sell near the bottom.",
+                        "zh": "全面金融危机爆发。大型投资银行雷曼兄弟在 2008 年 9 月破产。A 公司需要政府救助。美国股市从高点下跌约 50%。借钱投资（杠杆）的投资者收到追加保证金通知，被迫在接近最低点时卖出。"},
+            "2012-10": {"en": "The economy slowly recovered. Company A survived but cut its dividend to almost nothing and combined every 10 shares into 1 (a reverse split). Consumer companies kept growing.",
+                        "zh": "经济缓慢复苏。A 公司活了下来，但分红几乎砍光，还把每 10 股合并成 1 股（反向拆股）。消费类公司持续增长。"},
+            "2017-10": {"en": "Ten years later, the US stock market is nearly 4 times its 2009 low. People who stayed invested — or kept buying — recovered and then some.",
+                        "zh": "十年后，美国股市已接近 2009 年低点的 4 倍。坚持持有、甚至持续买入的人不仅回本，还赚了更多。"},
+        },
+        "lessons_en": ["High dividends and past profits did not make Company A safe. Banks that use lots of borrowed money can lose it fast.",
+                       "Leverage turns a painful drop into a total loss: a 50% market fall wipes out an investor who borrowed as much as they owned.",
+                       "Selling in panic near the bottom locked in losses; patient investors in steady businesses recovered.",
+                       "Businesses people need in bad times (low prices, affordable food) can hold up best."],
+        "lessons_zh": ["高分红和过去的利润并没有让 A 公司变得安全。大量借钱经营的银行可能很快亏光。",
+                       "杠杆会把痛苦的下跌变成全部亏光：借了和本金一样多的钱，市场跌 50% 就会被清零。",
+                       "在底部恐慌卖出会把亏损锁定；耐心持有稳健企业的投资者最终回本。",
+                       "经济不好时人们仍需要的生意（低价商品、平价食物）往往最抗跌。"],
+        "questions_en": ["Why did the bank's high dividend turn out to be a warning sign?", "What would have happened with 2x leverage at the 2009 low?"],
+        "questions_zh": ["为什么这家银行的高分红反而是一个危险信号？", "如果用了 2 倍杠杆，在 2009 年的低点会发生什么？"],
+    },
+    {
+        "id": "smartphone_2007", "year": 2007, "difficulty": 2, "benchmark": "SPY", "unlocks_for": 5,
+        "dates": ["2007-06", "2008-06", "2012-06", "2017-06"],
+        "title_en": "The Smartphone Revolution (2007)", "title_zh": "智能手机革命（2007）",
+        "tagline_en": "Can the market leader lose?", "tagline_zh": "行业老大也会输吗？",
+        "intro_en": "It is June 2007. Most people use phones with buttons. A newcomer is about to launch a phone with only a touchscreen. You have $10,000 to split between four technology companies and cash.",
+        "intro_zh": "现在是 2007 年 6 月。大多数人用的是带按键的手机。一个新玩家即将推出只有触摸屏的手机。你有 1 万美元，可以分配到四家科技公司和现金上。",
+        "companies": [
+            C("A", "NOK", "Nokia (NOK)",
+              "The world's biggest mobile-phone maker.", "全球最大的手机制造商。",
+              ["About 4 in 10 phones sold worldwide carry its brand", "Very profitable", "Strong brand in Europe and Asia"],
+              ["全球每卖出 10 部手机约有 4 部是它的品牌", "非常赚钱", "在欧洲和亚洲品牌很强"],
+              "Nokia was slow to switch to touchscreens and app stores. Its market share collapsed, it sold its phone business in 2014, and its stock fell about 90% at the worst point.",
+              "诺基亚转向触摸屏和应用商店太慢。市场份额崩塌，2014 年卖掉手机业务，股价最多下跌约 90%。"),
+            C("B", "BB", "Research In Motion / BlackBerry (BB)",
+              "Makes the most popular smartphone for business people.", "生产商务人士最喜爱的智能手机。",
+              ["Famous for its physical keyboard and secure email", "Sales are growing very fast", "Loved by companies and governments"],
+              ["以实体键盘和安全邮件闻名", "销售增长非常快", "深受企业和政府喜爱"],
+              "BlackBerry kept growing for a while — its stock rose 75% in the first year — then touchscreen phones took over. By 2016 it stopped making its own phones; the stock lost about 90%.",
+              "黑莓增长了一段时间——第一年股价上涨 75%——然后触屏手机全面取代了它。到 2016 年它停止自产手机，股价下跌约 90%。"),
+            C("C", "AAPL", "Apple (AAPL)",
+              "Known for computers and a very popular music player.", "以电脑和非常受欢迎的音乐播放器闻名。",
+              ["This month it launches its first phone: touchscreen, no keyboard", "No experience in the phone business", "Critics say business users will never give up keyboards"],
+              ["本月推出第一部手机：触摸屏、没有键盘", "没有做手机的经验", "批评者说商务用户永远不会放弃键盘"],
+              "The iPhone and the App Store changed the industry. Apple became the most valuable company in the world; the stock rose about 9x in ten years.",
+              "iPhone 和 App Store 改变了整个行业。苹果成为全球市值最高的公司，股价十年上涨约 9 倍。"),
+            C("D", "MSFT", "Microsoft (MSFT)",
+              "The world's biggest software company.", "全球最大的软件公司。",
+              ["Its operating system runs on over 90% of personal computers", "Also makes software for phones", "Very profitable, pays a dividend"],
+              ["它的操作系统运行在 90% 以上的个人电脑上", "也做手机软件", "非常赚钱，有分红"],
+              "Microsoft lost the phone war, but a new CEO in 2014 moved it into cloud computing. The stock tripled by 2017 — a comeback from a different business.",
+              "微软输掉了手机大战，但 2014 年新 CEO 带领它转向云计算。到 2017 年股价涨了 3 倍——靠另一块业务实现了逆袭。"),
+        ],
+        "events": {
+            "2008-06": {"en": "The touchscreen phone sold millions. Company C announced an app store where anyone can sell apps. Google announced a free phone operating system called Android. The financial crisis is starting.",
+                        "zh": "触屏手机卖出数百万部。C 公司宣布推出任何人都可以卖应用的应用商店。谷歌发布了免费的手机操作系统 Android。金融危机正在开始。"},
+            "2012-06": {"en": "Touchscreen smartphones have taken over. Company A's profits and market share collapsed and it teamed up with Company D on phones. Company B's sales started falling.",
+                        "zh": "触屏智能手机已经全面普及。A 公司的利润和市场份额崩塌，与 D 公司合作做手机。B 公司的销售开始下滑。"},
+            "2017-06": {"en": "Company C is the most valuable company in the world. Company D found new growth in cloud computing. Company A sold its phone business; Company B no longer makes its own phones.",
+                        "zh": "C 公司成为全球市值最高的公司。D 公司在云计算中找到了新增长。A 公司卖掉了手机业务；B 公司不再自产手机。"},
+        },
+        "lessons_en": ["Being the leader today does not guarantee tomorrow. New technology can break a company's moat quickly.",
+                       "Watch what customers do, not what experts say (\"business users will never give up keyboards\").",
+                       "Companies can reinvent themselves (Company D) — but it is hard to predict which ones will.",
+                       "Holding several companies meant one big winner could make up for the losers."],
+        "lessons_zh": ["今天的老大不代表明天还是老大。新技术可能很快打破一家公司的护城河。",
+                       "看顾客怎么做，而不是专家怎么说（“商务用户永远不会放弃键盘”）。",
+                       "公司可以自我重塑（D 公司）——但很难预测谁能做到。",
+                       "同时持有几家公司，一个大赢家就能弥补输家的损失。"],
+        "questions_en": ["What signs could have warned you about Company A and B in 2008?", "Why was Company C's lack of phone experience not a problem?"],
+        "questions_zh": ["2008 年有哪些信号可以提醒你 A 和 B 公司的风险？", "为什么 C 公司没有手机经验并不是问题？"],
+    },
+    {
+        "id": "pandemic_2020", "year": 2020, "difficulty": 1, "benchmark": "SPY", "unlocks_for": None,
+        "dates": ["2020-01", "2020-03", "2020-12", "2024-12"],
+        "title_en": "The Pandemic Shock (2020)", "title_zh": "疫情冲击（2020）",
+        "tagline_en": "Panic, hype, and patience.", "tagline_zh": "恐慌、狂热与耐心。",
+        "intro_en": "It is January 2020. The US economy is strong and unemployment is at a 50-year low. News reports mention a new virus spreading in China. You have $10,000 to split between three companies and cash.",
+        "intro_zh": "现在是 2020 年 1 月。美国经济强劲，失业率处于 50 年来最低。新闻提到一种新病毒在中国传播。你有 1 万美元，可以分配到三家公司和现金上。",
+        "companies": [
+            C("A", "ZM", "Zoom Video Communications (ZM)",
+              "A video-meeting app company.", "一家视频会议软件公司。",
+              ["Growing fast among businesses", "Profitable", "Already priced at a high valuation"],
+              ["在企业中增长很快", "已经盈利", "估值已经很高"],
+              "Working from home made Zoom a household name and its stock rose more than 4x in 2020. When life returned to normal, growth slowed and the stock fell back to roughly where it started.",
+              "居家办公让 Zoom 家喻户晓，股价在 2020 年涨了 4 倍多。生活恢复正常后增长放缓，股价又跌回了起点附近。"),
+            C("B", "CCL", "Carnival Corporation (CCL)",
+              "The world's largest cruise-ship company.", "全球最大的邮轮公司。",
+              ["Record number of passengers last year", "Pays a dividend", "Owns expensive ships paid for with borrowed money"],
+              ["去年乘客数量创纪录", "有分红", "拥有大量靠借钱买来的昂贵邮轮"],
+              "Cruises stopped completely for over a year. Carnival survived by borrowing billions and selling many new shares, which diluted existing owners. Five years later its stock was still about 40% below where it started.",
+              "邮轮业务停摆一年多。嘉年华靠借入数十亿美元和大量增发新股活了下来，稀释了原有股东。五年后股价仍比起点低约 40%。"),
+            C("C", "COST", "Costco Wholesale (COST)",
+              "A membership warehouse store selling groceries and household goods in bulk.", "一家会员制仓储超市，大包装出售食品和日用品。",
+              ["Steady growth for decades", "Members renew year after year", "Not exciting"],
+              ["几十年稳定增长", "会员年年续费", "一点也不刺激"],
+              "People stocked up on essentials and kept shopping at Costco. The stock dipped briefly, then more than tripled by the end of 2024.",
+              "人们囤积生活必需品，并持续在 Costco 购物。股价短暂下跌后，到 2024 年底涨了 3 倍多。"),
+        ],
+        "events": {
+            "2020-03": {"en": "The virus spread worldwide (a pandemic). Cities locked down and cruise ships stopped sailing. At the worst point in March, the US stock market had fallen about 34% from its February high — the fastest crash in history. Many people panicked and sold.",
+                        "zh": "病毒在全球蔓延（大流行）。城市封锁，邮轮停航。3 月最糟糕的时候，美国股市较 2 月高点下跌约 34%——史上最快的崩盘。很多人恐慌卖出。"},
+            "2020-12": {"en": "Governments and the central bank pumped trillions of dollars into the economy. Vaccines were approved in December. Working from home made Company A's app a household name.",
+                        "zh": "政府和央行向经济注入了数万亿美元。12 月疫苗获批。居家办公让 A 公司的软件家喻户晓。"},
+            "2024-12": {"en": "Life went back to normal: people returned to offices and travel. Company B survived by borrowing money and issuing lots of new shares. Company A's growth slowed a lot.",
+                        "zh": "生活恢复正常：人们回到办公室，开始旅行。B 公司靠借钱和大量增发新股活了下来。A 公司的增长大幅放缓。"},
+        },
+        "lessons_en": ["The fastest crash in history was followed by a fast recovery. Selling in panic in March 2020 was usually the worst move.",
+                       "A company that booms because of a one-time event may fall back when the event ends (Company A).",
+                       "Surviving is not the same as recovering: issuing lots of new shares (dilution) left old owners with a smaller slice (Company B).",
+                       "Steady businesses with loyal customers kept compounding (Company C)."],
+        "lessons_zh": ["史上最快的崩盘之后是快速的反弹。2020 年 3 月恐慌卖出通常是最糟糕的决定。",
+                       "因一次性事件而暴涨的公司，事件结束后可能跌回去（A 公司）。",
+                       "活下来不等于涨回来：大量增发新股（稀释）让老股东手里的份额变小（B 公司）。",
+                       "拥有忠诚顾客的稳健企业持续复利增长（C 公司）。"],
+        "questions_en": ["What did you do in March 2020, and why?", "How can you tell a lasting change from a temporary boom?"],
+        "questions_zh": ["2020 年 3 月你做了什么？为什么？", "怎样区分长期的改变和暂时的热潮？"],
+    },
+]
+SCENARIO_INDEX = {s["id"]: s for s in SCENARIOS}

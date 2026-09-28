@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { CheckCircle2, GraduationCap, Lightbulb, MessagesSquare, Search } from "lucide-react";
+import { CheckCircle2, GraduationCap, Lightbulb, MessagesSquare, Route, Search, XCircle } from "lucide-react";
 import { api, loadGlossary } from "@/lib/api";
 import { errorText } from "@/lib/errorText";
 import type { LearningCard } from "@/lib/types";
@@ -20,7 +20,10 @@ import { cn } from "@/lib/utils";
 export default function Learn() {
   const { t } = useTranslation();
   const profile = useProfile();
-  const { language } = useApp();
+  const { language, refreshPath } = useApp();
+  const [params, setParams] = useSearchParams();
+  const [choice, setChoice] = useState<number | null>(null);
+  const [verdict, setVerdict] = useState<"correct" | "wrong" | null>(null);
   const toast = useToast();
   const zh = language === "zh-CN";
   useDocumentTitle(t("learn.title"));
@@ -36,12 +39,31 @@ export default function Learn() {
   const total = cards.data?.length ?? 0;
   const pct = total ? (done.size / total) * 100 : 0;
 
+  // Deep link from the learning path: /learn?card=<id>
+  useEffect(() => {
+    const id = params.get("card");
+    if (id && cards.data) {
+      const c = cards.data.find((x) => x.id === id);
+      if (c) setOpenCard(c);
+    }
+  }, [params, cards.data]);
+  useEffect(() => { setChoice(null); setVerdict(null); }, [openCard?.id]);
+  const closeCard = () => {
+    setOpenCard(null);
+    if (params.get("card")) { params.delete("card"); setParams(params, { replace: true }); }
+  };
+
   const markLearned = async (c: LearningCard) => {
+    if (c.quiz && choice === null) { toast.push("error", t("errors.QUIZ_ANSWER_REQUIRED")); return; }
     setMarking(true);
     try {
-      await api.completeCard(profile.id, c.id);
+      const r = await api.completeCard(profile.id, c.id, c.quiz ? choice : null);
+      if (!r.correct) { setVerdict("wrong"); return; }
+      setVerdict("correct");
       progress.setData((p) => [...(p ?? []), { card_id: c.id, completed_at: new Date().toISOString() }]);
-      toast.push("achievement", t("achievement.card"));
+      toast.push("achievement", r.xp_awarded ? `${t("achievement.card")} ${t("learn.xp", { n: r.xp_awarded })}` : t("achievement.card"));
+      if (r.level_up) toast.push("achievement", t("achievement.levelUp"));
+      void refreshPath();
     } catch (e) {
       toast.push("error", errorText(t, e));
     } finally {
@@ -80,7 +102,10 @@ export default function Learn() {
                       className={cn("flex h-full w-full flex-col rounded-xl border bg-card p-4 text-left shadow-card transition hover:-translate-y-0.5 hover:shadow-pop",
                         learned && "border-success/40")}>
                       <div className="flex items-center justify-between gap-2">
-                        <Badge variant={c.level === 1 ? "default" : c.level === 2 ? "accent" : "warning"}>{t("learn.level", { n: c.level })}</Badge>
+                        <span className="flex flex-wrap gap-1">
+                          <Badge variant={c.level === 1 ? "default" : c.level === 2 ? "accent" : "warning"}>{t("learn.level", { n: c.level })}</Badge>
+                          {c.path_level && <Badge variant="outline"><Route aria-hidden />{t("learn.pathLesson", { n: c.path_level })}</Badge>}
+                        </span>
                         {learned && <span className="inline-flex items-center gap-1 text-xs font-medium text-success"><CheckCircle2 className="size-4" aria-hidden />{t("learn.learned")}</span>}
                       </div>
                       <h3 className="mt-3 font-semibold leading-snug">{zh ? c.title_zh : c.title_en}</h3>
@@ -114,7 +139,7 @@ export default function Learn() {
         </div>
       )}
 
-      <Dialog open={!!openCard} onClose={() => setOpenCard(null)} size="lg"
+      <Dialog open={!!openCard} onClose={closeCard} size="lg"
         title={openCard ? (zh ? openCard.title_zh : openCard.title_en) : ""}
         footer={openCard && <>
           <Link to={`/masters/buffett?q=${encodeURIComponent(t("learn.askAbout", { title: zh ? openCard.title_zh : openCard.title_en }))}`}
@@ -122,7 +147,9 @@ export default function Learn() {
           {done.has(openCard.id) ? (
             <Button variant="secondary" disabled><CheckCircle2 /> {t("learn.learned")}</Button>
           ) : (
-            <Button onClick={() => void markLearned(openCard)} loading={marking}>{!marking && <CheckCircle2 />} {t("learn.markLearned")}</Button>
+            <Button onClick={() => void markLearned(openCard)} loading={marking} disabled={!!openCard.quiz && choice === null}>
+              {!marking && <CheckCircle2 />} {openCard.quiz ? t("learn.checkAnswer") : t("learn.markLearned")}
+            </Button>
           )}
         </>}>
         {openCard && (
@@ -140,6 +167,33 @@ export default function Learn() {
                 <p className="mt-1 text-sm font-medium leading-6">{zh ? openCard.question_zh : openCard.question_en}</p>
               </div>
             </div>
+            {openCard.quiz && (
+              <fieldset className="rounded-xl border-2 border-primary/25 p-4">
+                <legend className="px-1 text-xs font-semibold uppercase tracking-wider text-primary">{t("learn.check")}</legend>
+                <p className="text-sm font-medium leading-6">{zh ? openCard.quiz.q_zh : openCard.quiz.q_en}</p>
+                {!done.has(openCard.id) && <p className="mt-0.5 text-xs text-muted-foreground">{t("learn.checkHint")}</p>}
+                <div className="mt-3 grid gap-2" role="radiogroup">
+                  {(zh ? openCard.quiz.choices_zh : openCard.quiz.choices_en).map((ch, i) => {
+                    const learned = done.has(openCard.id);
+                    const isAnswer = i === openCard.quiz!.answer;
+                    return (
+                      <label key={i} className={cn("flex cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2 text-sm transition",
+                        choice === i && "border-primary bg-primary-soft",
+                        (learned || verdict === "correct") && isAnswer && "border-success bg-success-soft",
+                        verdict === "wrong" && choice === i && "border-danger bg-danger-soft")}>
+                        <input type="radio" name="quiz" className="accent-[hsl(var(--primary))]" checked={choice === i || ((learned || verdict === "correct") && isAnswer && choice === null)}
+                          onChange={() => { setChoice(i); setVerdict(null); }} disabled={learned || verdict === "correct"} />
+                        {ch}
+                      </label>
+                    );
+                  })}
+                </div>
+                {verdict === "wrong" && <p className="mt-3 flex items-center gap-1.5 text-sm text-danger"><XCircle className="size-4" aria-hidden />{t("learn.tryAgain")}</p>}
+                {(verdict === "correct" || done.has(openCard.id)) && (
+                  <p className="mt-3 text-sm leading-6"><span className="font-semibold text-success">{t("learn.correct")}</span> {zh ? openCard.quiz.explain_zh : openCard.quiz.explain_en}</p>
+                )}
+              </fieldset>
+            )}
             {openCard.terms.length > 0 && (
               <div>
                 <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t("learn.relatedTerms")}</p>

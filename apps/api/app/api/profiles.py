@@ -27,7 +27,9 @@ from app.models import (
     User,
     WatchlistItem,
 )
-from app.services import auth, market_data
+from app.data.levels import LEARNING_START_CASH
+from app.models import AllowanceSchedule
+from app.services import allowance, auth, learning, market_data
 from app.services.portfolio import compute_portfolio
 from app.services.trading import create_account, reset_account
 
@@ -58,7 +60,8 @@ def _parent(db: Session) -> User | None:
 def profile_out(p: ChildProfile) -> dict:
     return {"id": p.id, "nickname": p.nickname, "age_group": p.age_group, "language": p.language, "avatar": p.avatar,
             "starting_cash": p.starting_cash, "allow_etf": p.allow_etf, "allow_fractional": p.allow_fractional,
-            "daily_ai_limit": p.daily_ai_limit, "daily_minutes_limit": p.daily_minutes_limit, "created_at": p.created_at}
+            "daily_ai_limit": p.daily_ai_limit, "daily_minutes_limit": p.daily_minutes_limit, "created_at": p.created_at,
+            "level_override": p.level_override, "family_access": p.family_access}
 
 
 # ------------------------------------------------------------------ setup / onboarding
@@ -154,10 +157,12 @@ def create_profile(body: ProfileIn, db: Session = Depends(get_db), _: str = Depe
     p = ChildProfile(family_id=fam.id, nickname=body.nickname.strip(), age_group=body.age_group, language=body.language,
                      avatar=body.avatar, starting_cash=body.starting_cash, allow_etf=body.allow_etf,
                      allow_fractional=body.allow_fractional, daily_ai_limit=body.daily_ai_limit,
-                     daily_minutes_limit=body.daily_minutes_limit)
+                     daily_minutes_limit=body.daily_minutes_limit, level_override=body.level_override,
+                     family_access=body.family_access)
     db.add(p)
     db.flush()
-    create_account(db, p, Decimal(body.starting_cash))
+    create_account(db, p, Decimal(body.starting_cash), "family")
+    create_account(db, p, LEARNING_START_CASH, "learning")
     db.commit()
     return profile_out(p)
 
@@ -170,9 +175,9 @@ def get_profile_route(p: ChildProfile = Depends(get_profile)):
 @router.patch("/profiles/{profile_id}")
 def patch_profile(body: ProfilePatch, p: ChildProfile = Depends(get_profile), db: Session = Depends(get_db),
                   x_parent_token: str | None = Header(default=None)):
-    changes = body.model_dump(exclude_unset=True, exclude={"clear_ai_limit", "clear_minutes_limit"})
+    changes = body.model_dump(exclude_unset=True, exclude={"clear_ai_limit", "clear_minutes_limit", "clear_level_override"})
     is_parent = auth.check_parent_token(x_parent_token) is not None
-    if not is_parent and (set(changes) - CHILD_EDITABLE or body.clear_ai_limit or body.clear_minutes_limit):
+    if not is_parent and (set(changes) - CHILD_EDITABLE or body.clear_ai_limit or body.clear_minutes_limit or body.clear_level_override):
         raise err(401, "PARENT_AUTH_REQUIRED")
     for k, v in changes.items():
         if v is not None:
@@ -181,7 +186,11 @@ def patch_profile(body: ProfilePatch, p: ChildProfile = Depends(get_profile), db
         p.daily_ai_limit = None
     if body.clear_minutes_limit:
         p.daily_minutes_limit = None
+    if body.clear_level_override:
+        p.level_override = None
     db.commit()
+    if "level_override" in changes or body.clear_level_override:
+        learning.sync(db, p)
     return profile_out(p)
 
 
@@ -195,8 +204,10 @@ def archive_profile(p: ChildProfile = Depends(get_profile), db: Session = Depend
 @router.post("/profiles/{profile_id}/reset-portfolio")
 def reset_portfolio(body: ResetIn, p: ChildProfile = Depends(get_profile), db: Session = Depends(get_db),
                     _: str = Depends(auth.require_parent)):
-    acct = reset_account(db, p, body.starting_cash)
-    return {"ok": True, "epoch": acct.epoch, "starting_cash": acct.starting_cash}
+    learning.ensure_accounts(db, p)
+    acct = reset_account(db, p, body.starting_cash, body.account)
+    learning.sync(db, p)  # re-credit level bonuses in a reset learning account
+    return {"ok": True, "epoch": acct.epoch, "starting_cash": acct.starting_cash, "account": body.account}
 
 
 @router.get("/profiles/{profile_id}/export")
@@ -216,12 +227,22 @@ def parent_overview(db: Session = Depends(get_db), _: str = Depends(auth.require
     out = []
     today = date.today()
     for p in db.scalars(select(ChildProfile).where(ChildProfile.archived.is_(False)).order_by(ChildProfile.created_at)):
+        accounts = {}
         try:
-            pf = compute_portfolio(db, p.id, market_data.get_quote)
-            summary = {k: pf[k] for k in ("total_equity", "cash", "total_pnl", "total_return_pct", "today_pnl", "largest_position_pct")}
-            summary["positions"] = len(pf["positions"])
+            info = learning.sync(db, p)
+            level = info["level"]
         except Exception:
-            summary = None
+            level = None
+        for kind in ("family", "learning"):
+            try:
+                pf = compute_portfolio(db, p.id, market_data.get_quote, kind)
+                sm = {k: pf[k] for k in ("total_equity", "cash", "total_pnl", "total_return_pct", "today_pnl", "largest_position_pct",
+                                         "contributions", "cd_value", "option_value")}
+                sm["positions"] = len(pf["positions"])
+                accounts[kind] = sm
+            except Exception:
+                accounts[kind] = None
+        summary = accounts.get("family")
         trades = db.scalars(select(Trade).where(Trade.profile_id == p.id, Trade.status == "EXECUTED")).all()
         research = db.scalars(select(ResearchReport).where(ResearchReport.profile_id == p.id, ResearchReport.status == "done",
                                                             ResearchReport.parent_id.is_(None))).all()  # follow-ups are not reports
@@ -246,6 +267,9 @@ def parent_overview(db: Session = Depends(get_db), _: str = Depends(auth.require
         out.append({
             "profile": profile_out(p),
             "portfolio": summary,
+            "accounts": accounts,
+            "learning": {"level": level, "xp": learning.xp_summary(db, p.id), "scenarios_done": len(learning.completed_scenarios(db, p.id))},
+            "allowance": allowance.schedule_out(db.scalar(select(AllowanceSchedule).where(AllowanceSchedule.profile_id == p.id))),
             "stats": {
                 "trades": len(trades), "research_reports": len(research), "master_questions": chats, "learning_cards_completed": learned,
                 "watchlist": watch, "ai_requests_today": usage.requests if usage else 0,
